@@ -1,0 +1,6 @@
+node_modules/
+/build-monitor-site/
+/tmp/
+/.tmp/
+*.log
+.DS_Store

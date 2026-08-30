@@ -1,0 +1,17 @@
+{
+  "name": "build-monitor",
+  "version": "0.1.0",
+  "description": "GitHub Action publishing a monitoring page of workflow runs (jobs, steps, durations) and mvn-lens Maven build reports, without artifacts",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": "github:mvn-perf/build-monitor",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "node scripts/check-syntax.js",
+    "demo": "node scripts/demo.js",
+    "serve": "node scripts/serve.js"
+  }
+}

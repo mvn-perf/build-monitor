@@ -1,0 +1,904 @@
+{
+ "session": {
+  "artifactId": "it04-multi-module",
+  "builderId": "singlethreaded",
+  "cpuMs": 903,
+  "endedAt": 1787846078534,
+  "gcCount": 17,
+  "gcMs": 0,
+  "goals": [
+   "clean",
+   "verify"
+  ],
+  "groupId": "org.mvnlens.it",
+  "jdk": "17.0.8.1",
+  "jdkVersion": "17.0.8.1",
+  "maven": "3.9.16",
+  "mavenVersion": "3.9.16",
+  "runId": "a28d857b-fc5f-4e8f-9dbc-34d2817be0ae",
+  "startedAt": 1787846070961,
+  "status": "OK",
+  "threads": 1,
+  "totalMs": 7975,
+  "version": "1.0-SNAPSHOT",
+  "wallMs": 7573
+ },
+ "environment": {
+  "availableProcessors": 16,
+  "c2DisabledBy": null,
+  "containerCpuPeriod": -1,
+  "containerCpuQuota": -1,
+  "containerCpuShares": -1,
+  "containerEffectiveCpus": -1,
+  "containerMemoryLimit": -1,
+  "containerType": null,
+  "cpuCores": 16,
+  "cpuModel": "AMD Ryzen 9 7940HS w/ Radeon 780M Graphics",
+  "cpuSockets": 1,
+  "cpuThreads": 16,
+  "gc": "G1 (G1New / G1Old)",
+  "gcThreads": 13,
+  "githubActions": false,
+  "jvmName": "OpenJDK 64-Bit Server VM",
+  "jvmOptions": [],
+  "jvmVendor": "Eclipse Adoptium",
+  "jvmVersion": "17.0.8.1",
+  "mavenOpts": null,
+  "mavenVersion": "3.9.16",
+  "memoryBytes": 14802644992,
+  "mvnd": false,
+  "osName": "Windows 11 , 64 bit Build 26100 (10.0.26100.9168)",
+  "virtualization": null
+ },
+ "modules": [
+  {
+   "artifactId": "it04-multi-module",
+   "name": "IT04: Muti-module",
+   "groupId": "org.mvnlens.it",
+   "version": "1.0-SNAPSHOT",
+   "moduleKey": "org.mvnlens.it:it04-multi-module:1.0-SNAPSHOT",
+   "packaging": "pom",
+   "reactorIndex": 0,
+   "startMs": 1787846071178,
+   "endMs": 1787846071440,
+   "wallMs": 262,
+   "forkCount": 0,
+   "mojos": [
+    {
+     "durationMs": 174,
+     "executionId": "default-clean",
+     "goal": "clean",
+     "moduleKey": "org.mvnlens.it:it04-multi-module:1.0-SNAPSHOT",
+     "phase": "clean",
+     "plugin": "org.apache.maven.plugins:maven-clean-plugin",
+     "startMs": 1787846071264,
+     "status": "OK",
+     "threadName": "main"
+    }
+   ]
+  },
+  {
+   "artifactId": "lib-a",
+   "name": "Library A",
+   "groupId": "org.mvnlens.it",
+   "version": "1.0-SNAPSHOT",
+   "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+   "packaging": "jar",
+   "reactorIndex": 1,
+   "startMs": 1787846071440,
+   "endMs": 1787846074574,
+   "wallMs": 3134,
+   "forkCount": 1,
+   "mojos": [
+    {
+     "durationMs": 1,
+     "executionId": "default-clean",
+     "goal": "clean",
+     "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+     "phase": "clean",
+     "plugin": "org.apache.maven.plugins:maven-clean-plugin",
+     "startMs": 1787846071553,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 171,
+     "executionId": "default-resources",
+     "goal": "resources",
+     "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+     "phase": "process-resources",
+     "plugin": "org.apache.maven.plugins:maven-resources-plugin",
+     "startMs": 1787846071555,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 660,
+     "executionId": "default-compile",
+     "goal": "compile",
+     "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+     "phase": "compile",
+     "plugin": "org.apache.maven.plugins:maven-compiler-plugin",
+     "startMs": 1787846071727,
+     "status": "OK",
+     "threadName": "main"
+    }
+   ]
+  },
+  {
+   "artifactId": "lib-b",
+   "name": "Library B",
+   "groupId": "org.mvnlens.it",
+   "version": "1.0-SNAPSHOT",
+   "moduleKey": "org.mvnlens.it:lib-b:1.0-SNAPSHOT",
+   "packaging": "jar",
+   "reactorIndex": 2,
+   "startMs": 1787846074574,
+   "endMs": 1787846075882,
+   "wallMs": 1308,
+   "forkCount": 1,
+   "mojos": [
+    {
+     "durationMs": 1,
+     "executionId": "default-clean",
+     "goal": "clean",
+     "moduleKey": "org.mvnlens.it:lib-b:1.0-SNAPSHOT",
+     "phase": "clean",
+     "plugin": "org.apache.maven.plugins:maven-clean-plugin",
+     "startMs": 1787846074583,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 0,
+     "executionId": "default-resources",
+     "goal": "resources",
+     "moduleKey": "org.mvnlens.it:lib-b:1.0-SNAPSHOT",
+     "phase": "process-resources",
+     "plugin": "org.apache.maven.plugins:maven-resources-plugin",
+     "startMs": 1787846074585,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 59,
+     "executionId": "default-compile",
+     "goal": "compile",
+     "moduleKey": "org.mvnlens.it:lib-b:1.0-SNAPSHOT",
+     "phase": "compile",
+     "plugin": "org.apache.maven.plugins:maven-compiler-plugin",
+     "startMs": 1787846074586,
+     "status": "OK",
+     "threadName": "main"
+    }
+   ]
+  },
+  {
+   "artifactId": "lib-c",
+   "name": "Library C",
+   "groupId": "org.mvnlens.it",
+   "version": "1.0-SNAPSHOT",
+   "moduleKey": "org.mvnlens.it:lib-c:1.0-SNAPSHOT",
+   "packaging": "jar",
+   "reactorIndex": 3,
+   "startMs": 1787846075883,
+   "endMs": 1787846077182,
+   "wallMs": 1299,
+   "forkCount": 1,
+   "mojos": [
+    {
+     "durationMs": 1,
+     "executionId": "default-clean",
+     "goal": "clean",
+     "moduleKey": "org.mvnlens.it:lib-c:1.0-SNAPSHOT",
+     "phase": "clean",
+     "plugin": "org.apache.maven.plugins:maven-clean-plugin",
+     "startMs": 1787846075891,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 0,
+     "executionId": "default-resources",
+     "goal": "resources",
+     "moduleKey": "org.mvnlens.it:lib-c:1.0-SNAPSHOT",
+     "phase": "process-resources",
+     "plugin": "org.apache.maven.plugins:maven-resources-plugin",
+     "startMs": 1787846075893,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 57,
+     "executionId": "default-compile",
+     "goal": "compile",
+     "moduleKey": "org.mvnlens.it:lib-c:1.0-SNAPSHOT",
+     "phase": "compile",
+     "plugin": "org.apache.maven.plugins:maven-compiler-plugin",
+     "startMs": 1787846075893,
+     "status": "OK",
+     "threadName": "main"
+    }
+   ]
+  },
+  {
+   "artifactId": "app",
+   "name": "Application",
+   "groupId": "org.mvnlens.it",
+   "version": "1.0-SNAPSHOT",
+   "moduleKey": "org.mvnlens.it:app:1.0-SNAPSHOT",
+   "packaging": "jar",
+   "reactorIndex": 4,
+   "startMs": 1787846077183,
+   "endMs": 1787846078533,
+   "wallMs": 1350,
+   "forkCount": 1,
+   "mojos": [
+    {
+     "durationMs": 1,
+     "executionId": "default-clean",
+     "goal": "clean",
+     "moduleKey": "org.mvnlens.it:app:1.0-SNAPSHOT",
+     "phase": "clean",
+     "plugin": "org.apache.maven.plugins:maven-clean-plugin",
+     "startMs": 1787846077191,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 0,
+     "executionId": "default-resources",
+     "goal": "resources",
+     "moduleKey": "org.mvnlens.it:app:1.0-SNAPSHOT",
+     "phase": "process-resources",
+     "plugin": "org.apache.maven.plugins:maven-resources-plugin",
+     "startMs": 1787846077192,
+     "status": "OK",
+     "threadName": "main"
+    },
+    {
+     "durationMs": 68,
+     "executionId": "default-compile",
+     "goal": "compile",
+     "moduleKey": "org.mvnlens.it:app:1.0-SNAPSHOT",
+     "phase": "compile",
+     "plugin": "org.apache.maven.plugins:maven-compiler-plugin",
+     "startMs": 1787846077193,
+     "status": "OK",
+     "threadName": "main"
+    }
+   ]
+  }
+ ],
+ "jit": [
+  {
+   "atMs": 0,
+   "durationMs": 625,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.SymbolTable.addConstantMemberReference",
+   "timeMs": 0
+  },
+  {
+   "atMs": 0,
+   "durationMs": 466,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.execute",
+   "timeMs": 0
+  },
+  {
+   "atMs": 0,
+   "durationMs": 150,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.merge",
+   "timeMs": 0
+  },
+  {
+   "atMs": 27,
+   "durationMs": 292,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.codehaus.plexus.util.xml.pull.MXParser.nextImpl",
+   "timeMs": 27
+  },
+  {
+   "atMs": 116,
+   "durationMs": 105,
+   "jvm": "maven",
+   "level": 4,
+   "method": "java.io.WinNTFileSystem.normalize",
+   "timeMs": 116
+  },
+  {
+   "atMs": 289,
+   "durationMs": 118,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.codehaus.plexus.util.xml.pull.MXParser.parseStartTag",
+   "timeMs": 289
+  },
+  {
+   "atMs": 412,
+   "durationMs": 117,
+   "jvm": "maven",
+   "level": 4,
+   "method": "java.io.WinNTFileSystem.normalize",
+   "timeMs": 412
+  },
+  {
+   "atMs": 450,
+   "durationMs": 164,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.merge",
+   "timeMs": 450
+  },
+  {
+   "atMs": 542,
+   "durationMs": 184,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.codehaus.plexus.util.xml.Xpp3Dom.<init>",
+   "timeMs": 542
+  },
+  {
+   "atMs": 645,
+   "durationMs": 165,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.eclipse.sisu.inject.LocatedBeans$Itr.hasNext",
+   "timeMs": 645
+  },
+  {
+   "atMs": 703,
+   "durationMs": 263,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.module.SystemModuleFinders$SystemModuleReader.find",
+   "timeMs": 703
+  },
+  {
+   "atMs": 869,
+   "durationMs": 169,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.jimage.ImageLocation.verify",
+   "timeMs": 869
+  },
+  {
+   "atMs": 869,
+   "durationMs": 278,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.module.SystemModuleFinders$SystemModuleReader.containsImageLocation",
+   "timeMs": 869
+  },
+  {
+   "atMs": 871,
+   "durationMs": 251,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.jimage.BasicImageReader.verifyLocation",
+   "timeMs": 871
+  },
+  {
+   "atMs": 882,
+   "durationMs": 272,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.jimage.ImageReader.verifyLocation",
+   "timeMs": 882
+  },
+  {
+   "atMs": 1088,
+   "durationMs": 190,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.internal.loader.BuiltinClassLoader.loadClassOrNull",
+   "timeMs": 1088
+  },
+  {
+   "atMs": 1202,
+   "durationMs": 138,
+   "jvm": "maven",
+   "level": 4,
+   "method": "java.lang.invoke.MethodType.makeImpl",
+   "timeMs": 1202
+  },
+  {
+   "atMs": 1545,
+   "durationMs": 299,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.jvm.ClassReader.classSigToType",
+   "timeMs": 1545
+  },
+  {
+   "atMs": 1578,
+   "durationMs": 228,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.jvm.PoolReader.resolve",
+   "timeMs": 1578
+  },
+  {
+   "atMs": 1650,
+   "durationMs": 200,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.apache.maven.model.Plugin.clone",
+   "timeMs": 1650
+  },
+  {
+   "atMs": 1774,
+   "durationMs": 362,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.codehaus.plexus.interpolation.StringSearchInterpolator.interpolate",
+   "timeMs": 1774
+  },
+  {
+   "atMs": 1830,
+   "durationMs": 181,
+   "jvm": "maven",
+   "level": 4,
+   "method": "java.net.URLStreamHandler.parseURL",
+   "timeMs": 1830
+  },
+  {
+   "atMs": 1889,
+   "durationMs": 107,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.objectweb.asm.SymbolTable.addConstantUtf8Reference",
+   "timeMs": 1889
+  },
+  {
+   "atMs": 1975,
+   "durationMs": 167,
+   "jvm": "maven",
+   "level": 4,
+   "method": "jdk.jfr.internal.MetadataWriter.write",
+   "timeMs": 1975
+  },
+  {
+   "atMs": 1988,
+   "durationMs": 138,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.apache.maven.model.merge.MavenModelMerger.mergePlugin_Executions",
+   "timeMs": 1988
+  },
+  {
+   "atMs": 1991,
+   "durationMs": 193,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.apache.maven.model.inheritance.DefaultInheritanceAssembler$InheritanceModelMerger.mergePlugin",
+   "timeMs": 1991
+  },
+  {
+   "atMs": 2046,
+   "durationMs": 215,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.codehaus.plexus.classworlds.realm.ClassRealm.loadClass",
+   "timeMs": 2046
+  },
+  {
+   "atMs": 2700,
+   "durationMs": 322,
+   "jvm": "fork:lib-a:default-test:14268",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.SymbolTable.addConstantMemberReference",
+   "timeMs": 2700
+  },
+  {
+   "atMs": 2717,
+   "durationMs": 227,
+   "jvm": "fork:lib-a:default-test:14268",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.execute",
+   "timeMs": 2717
+  },
+  {
+   "atMs": 3339,
+   "durationMs": 111,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.apache.maven.model.validation.DefaultModelValidator.validateId",
+   "timeMs": 3339
+  },
+  {
+   "atMs": 3516,
+   "durationMs": 192,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.google.inject.spi.InjectionPoint.getInjectionPoints",
+   "timeMs": 3516
+  },
+  {
+   "atMs": 4370,
+   "durationMs": 332,
+   "jvm": "fork:lib-b:default-test:4912",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.SymbolTable.addConstantMemberReference",
+   "timeMs": 4370
+  },
+  {
+   "atMs": 4389,
+   "durationMs": 219,
+   "jvm": "fork:lib-b:default-test:4912",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.execute",
+   "timeMs": 4389
+  },
+  {
+   "atMs": 4976,
+   "durationMs": 111,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.code.ClassFinder$1.hasNext",
+   "timeMs": 4976
+  },
+  {
+   "atMs": 4991,
+   "durationMs": 109,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.main.DelegatingJavaFileManager.inferBinaryName",
+   "timeMs": 4991
+  },
+  {
+   "atMs": 5006,
+   "durationMs": 129,
+   "jvm": "maven",
+   "level": 4,
+   "method": "java.util.jar.Attributes.read",
+   "timeMs": 5006
+  },
+  {
+   "atMs": 5088,
+   "durationMs": 166,
+   "jvm": "maven",
+   "level": 4,
+   "method": "org.eclipse.sisu.plexus.CompositeBeanHelper.findMethod",
+   "timeMs": 5088
+  },
+  {
+   "atMs": 5656,
+   "durationMs": 334,
+   "jvm": "fork:lib-c:default-test:2680",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.SymbolTable.addConstantMemberReference",
+   "timeMs": 5656
+  },
+  {
+   "atMs": 5672,
+   "durationMs": 221,
+   "jvm": "fork:lib-c:default-test:2680",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.execute",
+   "timeMs": 5672
+  },
+  {
+   "atMs": 6277,
+   "durationMs": 241,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.code.Symtab.lookupPackage",
+   "timeMs": 6277
+  },
+  {
+   "atMs": 6278,
+   "durationMs": 227,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.code.Symtab.enterClass",
+   "timeMs": 6278
+  },
+  {
+   "atMs": 6289,
+   "durationMs": 230,
+   "jvm": "maven",
+   "level": 4,
+   "method": "com.sun.tools.javac.jvm.ClassReader.enterClass",
+   "timeMs": 6289
+  },
+  {
+   "atMs": 6363,
+   "durationMs": 136,
+   "jvm": "maven",
+   "level": 4,
+   "method": "java.util.jar.Attributes.read",
+   "timeMs": 6363
+  },
+  {
+   "atMs": 6996,
+   "durationMs": 340,
+   "jvm": "fork:app:default-test:5764",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.SymbolTable.addConstantMemberReference",
+   "timeMs": 6996
+  },
+  {
+   "atMs": 7011,
+   "durationMs": 235,
+   "jvm": "fork:app:default-test:5764",
+   "level": 4,
+   "method": "jdk.internal.org.objectweb.asm.Frame.execute",
+   "timeMs": 7011
+  }
+ ],
+ "gc": [
+  {
+   "atMs": 738,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 738
+  },
+  {
+   "atMs": 836,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 836
+  },
+  {
+   "atMs": 839,
+   "collector": "G1Old",
+   "jvm": "maven",
+   "kind": "Old",
+   "pauseMs": 0,
+   "timeMs": 839
+  },
+  {
+   "atMs": 1369,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 1369
+  },
+  {
+   "atMs": 1436,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 1436
+  },
+  {
+   "atMs": 1664,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 1664
+  },
+  {
+   "atMs": 1906,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 1906
+  },
+  {
+   "atMs": 2594,
+   "collector": "G1New",
+   "jvm": "fork:lib-a:default-test:14268",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 2594
+  },
+  {
+   "atMs": 3492,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 3492
+  },
+  {
+   "atMs": 3585,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 3585
+  },
+  {
+   "atMs": 3588,
+   "collector": "G1Old",
+   "jvm": "maven",
+   "kind": "Old",
+   "pauseMs": 0,
+   "timeMs": 3588
+  },
+  {
+   "atMs": 4252,
+   "collector": "G1New",
+   "jvm": "fork:lib-b:default-test:4912",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 4252
+  },
+  {
+   "atMs": 4963,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 4963
+  },
+  {
+   "atMs": 4977,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 4977
+  },
+  {
+   "atMs": 5541,
+   "collector": "G1New",
+   "jvm": "fork:lib-c:default-test:2680",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 5541
+  },
+  {
+   "atMs": 6327,
+   "collector": "G1New",
+   "jvm": "maven",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 6327
+  },
+  {
+   "atMs": 6885,
+   "collector": "G1New",
+   "jvm": "fork:app:default-test:5764",
+   "kind": "Young",
+   "pauseMs": 0,
+   "timeMs": 6885
+  }
+ ],
+ "repoTransferSummary": {
+  "artifactDownloadsCount": 0,
+  "artifactUploadsCount": 0,
+  "bytesDownloadedThisBuild": 0,
+  "bytesInstalledThisBuild": 0,
+  "bytesUploadedThisBuild": 0,
+  "cacheFillsCount": 0,
+  "localRepoCount": 0,
+  "metadataDownloadsCount": 0,
+  "metadataUploadsCount": 0,
+  "millisDownloadedThisBuild": 0,
+  "reactorInstallsCount": 0,
+  "reactorResolveCount": 6,
+  "unknownResolveCount": 372
+ },
+ "issues": [],
+ "slowestMojo": {
+  "durationMs": 1651,
+  "executionId": "default-test",
+  "goal": "test",
+  "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+  "phase": "test",
+  "plugin": "org.apache.maven.plugins:maven-surefire-plugin"
+ },
+ "slowestTest": {
+  "className": "liba.LibATest",
+  "displayName": "name()",
+  "durationMs": 133,
+  "framework": "JUNIT5",
+  "method": "name",
+  "methodName": "name",
+  "name": "liba.LibATest#name"
+ },
+ "tests": {
+  "junit4": [],
+  "junit6": [],
+  "junitPlatform": [
+   {
+    "className": "liba.LibATest",
+    "displayName": "name()",
+    "durationMaxMs": 133,
+    "durationMeanMs": 133,
+    "durationMs": 133,
+    "framework": "JUNIT5",
+    "invocationCount": 1,
+    "methodName": "name",
+    "module": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+    "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+    "name": "liba.LibATest#name",
+    "outcome": "PASSED",
+    "status": "PASSED"
+   },
+   {
+    "className": "app.AppTest",
+    "displayName": "describes()",
+    "durationMaxMs": 128,
+    "durationMeanMs": 128,
+    "durationMs": 128,
+    "framework": "JUNIT5",
+    "invocationCount": 1,
+    "methodName": "describes",
+    "module": "org.mvnlens.it:app:1.0-SNAPSHOT",
+    "moduleKey": "org.mvnlens.it:app:1.0-SNAPSHOT",
+    "name": "app.AppTest#describes",
+    "outcome": "PASSED",
+    "status": "PASSED"
+   },
+   {
+    "className": "libb.LibBTest",
+    "displayName": "name()",
+    "durationMaxMs": 128,
+    "durationMeanMs": 128,
+    "durationMs": 128,
+    "framework": "JUNIT5",
+    "invocationCount": 1,
+    "methodName": "name",
+    "module": "org.mvnlens.it:lib-b:1.0-SNAPSHOT",
+    "moduleKey": "org.mvnlens.it:lib-b:1.0-SNAPSHOT",
+    "name": "libb.LibBTest#name",
+    "outcome": "PASSED",
+    "status": "PASSED"
+   },
+   {
+    "className": "libc.LibCTest",
+    "displayName": "name()",
+    "durationMaxMs": 124,
+    "durationMeanMs": 124,
+    "durationMs": 124,
+    "framework": "JUNIT5",
+    "invocationCount": 1,
+    "methodName": "name",
+    "module": "org.mvnlens.it:lib-c:1.0-SNAPSHOT",
+    "moduleKey": "org.mvnlens.it:lib-c:1.0-SNAPSHOT",
+    "name": "libc.LibCTest#name",
+    "outcome": "PASSED",
+    "status": "PASSED"
+   }
+  ],
+  "other": [],
+  "testng": [],
+  "vintage": []
+ },
+ "warnings": [],
+ "timelineGroups": [],
+ "timelineItems": [],
+ "cpu": [],
+ "memory": [],
+ "deps": [],
+ "diagnostics": {
+  "extensionVersion": "0.1.0-SNAPSHOT",
+  "forkJfrPaths": [
+   "C:\\code\\mvn-lens\\mvn-lens-it\\target\\it\\it04-multi-module\\target\\mvnlens\\jfr\\a28d857b-fc5f-4e8f-9dbc-34d2817be0ae\\app\\fork-maven-surefire-plugin-5220-5764-default-test-1787846077531.jfr",
+   "C:\\code\\mvn-lens\\mvn-lens-it\\target\\it\\it04-multi-module\\target\\mvnlens\\jfr\\a28d857b-fc5f-4e8f-9dbc-34d2817be0ae\\lib-a\\fork-maven-surefire-plugin-5220-14268-default-test-1787846073264.jfr",
+   "C:\\code\\mvn-lens\\mvn-lens-it\\target\\it\\it04-multi-module\\target\\mvnlens\\jfr\\a28d857b-fc5f-4e8f-9dbc-34d2817be0ae\\lib-b\\fork-maven-surefire-plugin-5220-4912-default-test-1787846074907.jfr",
+   "C:\\code\\mvn-lens\\mvn-lens-it\\target\\it\\it04-multi-module\\target\\mvnlens\\jfr\\a28d857b-fc5f-4e8f-9dbc-34d2817be0ae\\lib-c\\fork-maven-surefire-plugin-5220-2680-default-test-1787846076210.jfr"
+  ],
+  "frameworkDetectionPerModule": {
+   "org.mvnlens.it:app:1.0-SNAPSHOT": "native-listener",
+   "org.mvnlens.it:lib-a:1.0-SNAPSHOT": "native-listener",
+   "org.mvnlens.it:lib-b:1.0-SNAPSHOT": "native-listener",
+   "org.mvnlens.it:lib-c:1.0-SNAPSHOT": "native-listener"
+  },
+  "jfrAvailability": "OK",
+  "mavenJfrPath": "C:\\code\\mvn-lens\\mvn-lens-it\\target\\it\\it04-multi-module\\target\\mvnlens\\jfr\\a28d857b-fc5f-4e8f-9dbc-34d2817be0ae\\maven.jfr",
+  "outputDir": "C:\\code\\mvn-lens\\mvn-lens-it\\target\\it\\it04-multi-module\\target\\mvnlens",
+  "recordingCounts": {
+   "forks": 4,
+   "maven": 1
+  },
+  "warningsCount": 0
+ }
+}

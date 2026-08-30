@@ -1,0 +1,12 @@
+build-monitor
+Copyright (c) The mvn-perf Authors.
+
+This product includes software developed by the mvn-perf project
+(https://github.com/mvn-perf), licensed under the Apache License, Version 2.0.
+Parts of the source are derived from mvn-perf/build-dashboard (Apache-2.0).
+
+Third-party components bundled into the generated monitoring page:
+
+  Chart.js 4.4.6 — https://www.chartjs.org — MIT License
+  Copyright (c) 2014-2024 Chart.js Contributors
+  (site/vendor/chart.umd.min.js; see site/vendor/THIRD_PARTY.md)
