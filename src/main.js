@@ -39,12 +39,30 @@ const BAD_BRANCH_RE = /[\s~^:?*[\\]|\.\.|@\{|^\/|\/$|^-|\.lock$|(^|\/)\.|\.$/;
 /** Most recent runs listed in the job summary. */
 const SUMMARY_ROWS = 25;
 
-/** Summary fields kept in history.json (SPEC: no `modules`, a slim `environment`). */
+/**
+ * Summary fields kept in history.json (SPEC: no `modules`, a slim
+ * `environment`), grouped by the type each one MUST have once stored.
+ * meta.json is written by a build job and read back verbatim by the page, so a
+ * crafted (or merely broken) file must not be able to put a string where the
+ * reports table expects an array of goals, or an object where it expects a
+ * number: every value goes through the coercion of its group.
+ */
+const SUMMARY_NUMBER_FIELDS = [
+  'schemaVersion', 'threads', 'startedAt', 'endedAt', 'totalMs', 'wallMs', 'cpuMs', 'gcMs', 'gcCount', 'jitMs', 'c2Ms',
+  'downloadMs', 'downloadBytes', 'downloadCount', 'moduleCount', 'testCount', 'testMs', 'issueCount',
+];
+const SUMMARY_STRING_FIELDS = ['groupId', 'artifactId', 'version', 'builderId', 'mavenVersion', 'jdkVersion', 'status'];
+/** Structured but purely informational: kept as a plain object of scalars, never an array. */
+const SUMMARY_OBJECT_FIELDS = ['slowestMojo', 'slowestTest', 'issueSeverities'];
+/** The order the fields are written in (the serialized history must not churn between invocations). */
 const SUMMARY_FIELDS = [
   'schemaVersion', 'groupId', 'artifactId', 'version', 'goals', 'threads', 'builderId', 'mavenVersion', 'jdkVersion', 'status',
   'startedAt', 'endedAt', 'totalMs', 'wallMs', 'cpuMs', 'gcMs', 'gcCount', 'jitMs', 'c2Ms', 'downloadMs', 'downloadBytes', 'downloadCount',
   'moduleCount', 'slowestMojo', 'slowestTest', 'testCount', 'testMs', 'issueCount', 'issueSeverities',
 ];
+const ENVIRONMENT_NUMBER_FIELDS = ['availableProcessors'];
+const ENVIRONMENT_STRING_FIELDS = ['osName'];
+const ENVIRONMENT_BOOLEAN_FIELDS = ['mvnd', 'githubActions'];
 const ENVIRONMENT_FIELDS = ['availableProcessors', 'osName', 'mvnd', 'githubActions'];
 
 /** A configuration / environment problem the user can fix (reported, exit code 1, never a stack trace). */
@@ -113,22 +131,80 @@ function str(v) {
   return s ? s : null;
 }
 
-function httpUrl(v) {
-  return typeof v === 'string' && /^https?:\/\/\S+$/.test(v.trim()) ? v.trim() : null;
+/** A finite number, or null (a string, an object, NaN or Infinity are not numbers). */
+function finiteNum(v) { return typeof v === 'number' && Number.isFinite(v) ? v : null; }
+
+/** A plain object of scalars (no arrays, no nesting), or null. */
+function scalarObject(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (val === null || typeof val === 'string' || typeof val === 'boolean' || typeof val === 'number') {
+      out[k] = typeof val === 'number' ? finiteNum(val) : val;
+    }
+  }
+  return out;
 }
 
-/** The summary as stored in history.json: the headline numbers only (no modules, slim environment). */
+/**
+ * The summary as stored in history.json: the headline numbers only (no
+ * modules, slim environment), every value coerced to the type the page expects.
+ * meta.json comes from a build job — it is data, not a contract — so a wrong
+ * type here becomes null / [] rather than something the reports table throws on.
+ */
 function slimSummary(summary) {
   if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
   const out = {};
-  for (const k of SUMMARY_FIELDS) if (summary[k] !== undefined) out[k] = summary[k];
-  if (summary.environment && typeof summary.environment === 'object') {
+  for (const k of SUMMARY_FIELDS) {
+    if (summary[k] === undefined) continue;
+    if (k === 'goals') out.goals = Array.isArray(summary.goals) ? summary.goals.filter(g => typeof g === 'string') : [];
+    else if (SUMMARY_NUMBER_FIELDS.includes(k)) out[k] = finiteNum(summary[k]);
+    else if (SUMMARY_STRING_FIELDS.includes(k)) out[k] = typeof summary[k] === 'string' ? summary[k] : null;
+    else if (SUMMARY_OBJECT_FIELDS.includes(k)) out[k] = scalarObject(summary[k]);
+  }
+  const env = summary.environment;
+  if (env && typeof env === 'object' && !Array.isArray(env)) {
     out.environment = {};
-    for (const k of ENVIRONMENT_FIELDS) if (summary.environment[k] !== undefined) out.environment[k] = summary.environment[k];
+    for (const k of ENVIRONMENT_FIELDS) {
+      if (env[k] === undefined) continue;
+      if (ENVIRONMENT_NUMBER_FIELDS.includes(k)) out.environment[k] = finiteNum(env[k]);
+      else if (ENVIRONMENT_STRING_FIELDS.includes(k)) out.environment[k] = typeof env[k] === 'string' ? env[k] : null;
+      else if (ENVIRONMENT_BOOLEAN_FIELDS.includes(k)) out.environment[k] = !!env[k];
+    }
   } else {
     out.environment = null;
   }
   return out;
+}
+
+/** A regular file (not a symlink 120000, not a gitlink 160000, not a directory). */
+function isRegularBlob(e) {
+  return !!e && e.type === 'blob' && (e.mode === '100644' || e.mode === '100755');
+}
+
+/**
+ * The entries of one key directory that MAY be published, and nothing else.
+ * The inbox is written by build jobs with a contents:write token, so its trees
+ * are untrusted input: only regular blobs (100644/100755) named `report*.html`
+ * or `meta.json`, whose resulting site path passes `history.isValidReportPath`,
+ * are accepted. Nested directories, symlinks, submodules and stray files are
+ * refused with a warning — they must never reach the Pages site, where nothing
+ * counts or removes them.
+ *
+ * @returns {{ reports: object[], meta: object|null }} tree entries, report.html first
+ */
+function selectReportFiles(entries, dir, where) {
+  const reports = [];
+  let meta = null;
+  for (const e of entries || []) {
+    if (isRegularBlob(e) && history.isValidReportPath(`${dir}/${e.path}`)) {
+      if (e.path === 'meta.json') { meta = e; continue; }
+      if (REPORT_FILE_RE.test(e.path)) { reports.push(e); continue; }
+    }
+    warning(`${where}: ${dir}/${e.path} (${e.type}, mode ${e.mode}) is not an mvn-lens report file; not published and not listed`);
+  }
+  reports.sort((a, b) => (a.path === 'report.html' ? -1 : 0) - (b.path === 'report.html' ? -1 : 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { reports, meta };
 }
 
 /**
@@ -136,13 +212,16 @@ function slimSummary(summary) {
  * its tree entries: meta.json (≤ 1 MB, written by the report step inside the
  * build job) gives the attribution hints and the summaries, the report*.html
  * blobs give the files and their sizes. Nothing but meta.json is downloaded.
+ * `selection` is the `selectReportFiles` result when the caller already
+ * computed it (it needs the same entries to build the grafts).
  * Returns null when the directory holds no report file.
  */
 async function buildEntry(p) {
   const { store, run, key, entries, source } = p;
   const dir = `reports/${run.id}/${key}`;
+  const selection = p.selection || selectReportFiles(entries, dir, `run ${run.id} (${source})`);
   let meta = null;
-  const metaEntry = entries.find(e => e.path === 'meta.json' && e.type === 'blob');
+  const metaEntry = selection.meta;
   if (metaEntry) {
     try {
       const buf = await store.readBlob(metaEntry.sha, { maxBytes: MAX_META_BYTES, size: metaEntry.size });
@@ -153,12 +232,7 @@ async function buildEntry(p) {
       warning(`run ${run.id}: ${dir}/meta.json (${source}) unreadable (${e.message}); attributing by key only`);
     }
   }
-  const files = entries
-    .filter(e => e.type === 'blob' && REPORT_FILE_RE.test(e.path) && history.isValidReportPath(`${dir}/${e.path}`))
-    .sort((a, b) => (a.path === 'report.html' ? -1 : 0) - (b.path === 'report.html' ? -1 : 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  for (const e of entries) {
-    if (e.type === 'blob' && /\.html?$/i.test(e.path) && !files.includes(e)) warning(`run ${run.id}: ${dir}/${e.path} (${source}) is not a report file name; not listed`);
-  }
+  const files = selection.reports;
   if (!files.length) {
     warning(`run ${run.id}: ${dir} (${source}) holds no report.html; ignored`);
     return null;
@@ -185,7 +259,9 @@ async function buildEntry(p) {
     path: reports[0].path,
     jobId: job ? job.id : safeInt(meta && meta.jobId),
     jobName: job ? job.name : str(meta && (meta.jobName || meta.jobKey)),
-    jobUrl: job ? job.htmlUrl || null : httpUrl(meta && meta.jobUrl),
+    // Only a job of the latest attempt contributes a URL: meta.jobUrl is
+    // unvalidated input, and the page can always build <run.htmlUrl>/job/<id>.
+    jobUrl: job ? job.htmlUrl || null : null,
     stepNumber: step ? step.number : safeInt(meta && meta.stepNumber),
     stepName: step ? step.name : str(meta && meta.stepName),
     label: str(meta && meta.label),
@@ -300,7 +376,7 @@ async function execute(p) {
   const ref = 'heads/' + inputs.branch;
   const historyPath = posixJoin(inputs.siteDir, 'data', 'history.json');
   const trig = context.triggeringRun(ctx);
-  const stats = { runsFailed: 0, forkRunsSkipped: 0, notMonitored: 0, refsDeleted: 0, grafts: 0, graftedBytes: 0 };
+  const stats = { runsFailed: 0, forkRunsSkipped: 0, notMonitored: 0, refsDeleted: 0, grafts: 0, graftedKeys: 0, graftedBytes: 0 };
 
   // ---- 1. Site URL ----------------------------------------------------------
   const siteUrl = await context.resolveSiteUrl({ api, repository: repo, input: inputs.siteUrl, siteDir: inputs.siteDir, ctx });
@@ -407,7 +483,7 @@ async function execute(p) {
   // ---- 4. Per run: record + report sets + grafts ----------------------------
   util.group('Processing runs');
   const todo = Array.from(wanted.entries()).map(([id, w]) => ({ id, sources: w.sources, summary: w.summary })).sort((a, b) => b.id - a.id);
-  const processed = [];   // { id, record, grafts, inboxRef, files, bytes }
+  const processed = [];   // { id, record, grafts, graftedKeys, inboxRef, inboxSha, inboxAttempt, files, bytes }
   await mapLimit(todo, inputs.concurrency, async (t) => {
     try {
       let s = t.summary;
@@ -451,8 +527,10 @@ async function execute(p) {
       const grafts = [];
       let inboxRef = null;
       let inboxSha = null;
+      let inboxAttempt = 0;
       let files = 0;
       let bytes = 0;
+      let graftedKeys = 0;
       const ib = inbox.get(t.id);
       if (ib) {
         const ih = await store.readRef(ib.ref);
@@ -462,19 +540,30 @@ async function execute(p) {
           for (const ke of await store.listDir(ih.treeSha, `reports/${t.id}`)) {
             if (ke.type !== 'tree') continue;
             if (!history.isValidKey(ke.path)) { warning(`run ${t.id}: inbox key "${ke.path}" is not a valid key; ignored`); continue; }
-            const entry = await buildEntry({ store, run: record, key: ke.path, entries: await store.readTree(ke.sha), source: 'inbox' });
+            const dir = `reports/${t.id}/${ke.path}`;
+            const keyEntries = await store.readTree(ke.sha);
+            // NEVER graft the key tree itself: it would carry whatever the build
+            // job wrote (nested directories, symlinks, gitlinks, stray files)
+            // onto the Pages site, uncounted and unremovable. Only the files
+            // this invocation validated and recorded are published, by sha.
+            const selection = selectReportFiles(keyEntries, dir, `run ${t.id} (inbox)`);
+            const entry = await buildEntry({ store, run: record, key: ke.path, entries: keyEntries, selection, source: 'inbox' });
             if (!entry) continue;
             entries.set(ke.path, entry);
-            grafts.push({ path: posixJoin(inputs.siteDir, 'reports', String(t.id), ke.path), type: 'tree', sha: ke.sha });
+            const sitePrefix = posixJoin(inputs.siteDir, 'reports', String(t.id), ke.path);
+            for (const f of selection.reports) grafts.push({ path: `${sitePrefix}/${f.path}`, type: 'blob', mode: f.mode, sha: f.sha });
+            if (selection.meta) grafts.push({ path: `${sitePrefix}/meta.json`, type: 'blob', mode: selection.meta.mode, sha: selection.meta.sha });
+            graftedKeys++;
+            inboxAttempt = Math.max(inboxAttempt, safeInt(entry.attempt) || 1);
             files += entry.reports.length;
-            bytes += entry.bytes;
+            bytes += entry.bytes;   // exactly the report files published above
           }
-          if (!grafts.length) warning(`run ${t.id}: inbox ref ${ib.ref} holds no report set; it is left in place`);
+          if (!graftedKeys) warning(`run ${t.id}: inbox ref ${ib.ref} holds no report set; it is left in place`);
         }
       }
       record.mvnLens = mergeEntries([], Array.from(entries.values()));
-      processed.push({ id: t.id, record, grafts, inboxRef, inboxSha, files, bytes });
-      log(`  #${record.runNumber} ${record.workflowName} (${record.branch}) ${record.status}/${record.conclusion || '-'} ${fmtMs(record.durationMs)} · ${record.jobs.length} job(s) · ${record.mvnLens.length} report set(s)${grafts.length ? `, ${grafts.length} from the inbox (${fmtBytes(bytes)})` : ''} [${t.sources.join(', ')}]`);
+      processed.push({ id: t.id, record, grafts, graftedKeys, inboxRef, inboxSha, inboxAttempt, files, bytes });
+      log(`  #${record.runNumber} ${record.workflowName} (${record.branch}) ${record.status}/${record.conclusion || '-'} ${fmtMs(record.durationMs)} · ${record.jobs.length} job(s) · ${record.mvnLens.length} report set(s)${graftedKeys ? `, ${graftedKeys} from the inbox (${fmtBytes(bytes)})` : ''} [${t.sources.join(', ')}]`);
     } catch (e) {
       if (e instanceof ConfigError) throw e;
       stats.runsFailed++;
@@ -521,6 +610,7 @@ async function execute(p) {
     warning(`the mvn-lens reports on ${inputs.branch} total ${fmtBytes(hist.stats.reportsBytes)}; GitHub Pages serves sites up to 1 GB — retention is not built yet (delete the branch and re-run to reset the site)`);
   }
   stats.grafts = processed.reduce((n, x) => n + x.files, 0);
+  stats.graftedKeys = processed.reduce((n, x) => n + x.graftedKeys, 0);
   stats.graftedBytes = processed.reduce((n, x) => n + x.bytes, 0);
 
   // ---- 7. Publish (or dry run) ----------------------------------------------
@@ -528,7 +618,7 @@ async function execute(p) {
   let pages = null;
   if (inputs.dryRun) {
     const out = generateSite({ history: hist, siteDir: inputs.outputDir, title, siteUrl });
-    log(`Dry run: site written to ${inputs.outputDir} (${fmtBytes(out.bytes)} index, ${hist.runs.length} run(s)); ${allGrafts.length} report set(s) would be grafted, nothing pushed, inbox refs untouched`);
+    log(`Dry run: site written to ${inputs.outputDir} (${fmtBytes(out.bytes)} index, ${hist.runs.length} run(s)); ${stats.graftedKeys} report set(s) would be grafted, nothing pushed, inbox refs untouched`);
   } else {
     util.group(`Publishing to ${inputs.branch}`);
     const numbers = processed.slice(0, 5).map(x => '#' + x.record.runNumber).join(', ');
@@ -573,7 +663,7 @@ async function execute(p) {
     }
     state.commitSha = commit.sha;
     state.published = !!commit.changed;
-    if (commit.changed) log(`${commit.created ? 'Created' : 'Updated'} ${inputs.branch} → ${commit.sha} (${commit.uploaded.length} blob(s) uploaded, ${allGrafts.length} tree(s) grafted${commit.attempts ? `, ${commit.attempts} CAS retry(ies)` : ''})`);
+    if (commit.changed) log(`${commit.created ? 'Created' : 'Updated'} ${inputs.branch} → ${commit.sha} (${commit.uploaded.length} blob(s) uploaded, ${stats.graftedKeys} report set(s) grafted as ${allGrafts.length} blob(s)${commit.attempts ? `, ${commit.attempts} CAS retry(ies)` : ''})`);
     else log(`${inputs.branch} is already up to date at ${commit.sha}; nothing to publish`);
     util.endGroup();
 
@@ -649,21 +739,35 @@ async function execute(p) {
 }
 
 /**
- * Deletes the inbox refs whose report sets are now on the site branch. Only
- * the refs of COMPLETED runs go (a run that is still in progress may still be
- * pushing reports; its inbox is grafted again — by sha, for free — once it
- * completes), and only when the ref still points at the commit that was
- * grafted (a push after the snapshot would otherwise be lost). Failures here
- * are warnings: a leftover ref costs one more graft next time, never data.
+ * Deletes the inbox refs whose report sets are now on the site branch.
+ * DELETE /git/refs takes no expected-sha, so a report pushed between our last
+ * look and the request would be wiped although its `report` step reported
+ * success. The window is narrowed as far as the API allows:
+ *   - only the refs of COMPLETED runs go (a run still in progress may still be
+ *     pushing; its inbox is grafted again — by sha, for free — once it ends);
+ *   - only when the run's attempt is the attempt whose reports we grafted (a
+ *     re-run's `report` steps push to the SAME ref, and their pushes have not
+ *     landed yet — once they do, the next invocation grafts and deletes them);
+ *   - only when the listing still shows the sha we grafted, AND a fresh
+ *     readRef right before the DELETE still shows it.
+ * Failures here are warnings: a leftover ref costs one more graft next time,
+ * never data.
  */
 async function deleteGraftedInboxRefs(p) {
   const { store, inputs, processed, stats } = p;
-  const candidates = processed.filter(x => x.inboxRef && x.grafts.length);
+  const candidates = processed.filter(x => x.inboxRef && x.graftedKeys);
   if (!candidates.length) return;
   const todo = [];
   for (const x of candidates) {
-    if (x.record.status === 'completed') todo.push(x);
-    else log(`  inbox ref ${x.inboxRef} kept: run ${x.id} is still ${x.record.status || 'in progress'} (grafted again when it completes)`);
+    const runAttempt = safeInt(x.record.attempt) || 1;
+    const graftedAttempt = safeInt(x.inboxAttempt) || runAttempt;
+    if (x.record.status !== 'completed') {
+      log(`  inbox ref ${x.inboxRef} kept: run ${x.id} is still ${x.record.status || 'in progress'} (grafted again when it completes)`);
+    } else if (runAttempt > graftedAttempt) {
+      log(`  inbox ref ${x.inboxRef} kept: run ${x.id} is at attempt ${runAttempt} but the grafted reports are from attempt ${graftedAttempt} (the re-run's report steps push to the same ref)`);
+    } else {
+      todo.push(x);
+    }
   }
   if (!todo.length) return;
   let current;
@@ -673,13 +777,22 @@ async function deleteGraftedInboxRefs(p) {
     warning(`inbox refs could not be listed again before deletion (${e.message}); ${todo.length} ref(s) kept — they are grafted again next time (harmless)`);
     return;
   }
+  const moved = (x, sha) => warning(`inbox ref ${x.inboxRef} moved from ${x.inboxSha.slice(0, 7)} to ${sha.slice(0, 7)} after it was read (a report step pushed meanwhile); kept so the next invocation grafts the new reports`);
   for (const x of todo) {
     const sha = current.get(x.inboxRef);
     if (!sha) { debug(`${x.inboxRef} is already gone`); continue; }
-    if (sha !== x.inboxSha) {
-      warning(`inbox ref ${x.inboxRef} moved from ${x.inboxSha.slice(0, 7)} to ${sha.slice(0, 7)} after it was read (a report step pushed meanwhile); kept so the next invocation grafts the new reports`);
+    if (sha !== x.inboxSha) { moved(x, sha); continue; }
+    // Re-read immediately before the DELETE: the listing above is one request
+    // older, and a report that landed in between would be deleted unseen.
+    let fresh;
+    try {
+      fresh = await store.readRef(x.inboxRef);
+    } catch (e) {
+      warning(`inbox ref ${x.inboxRef} could not be re-read before deletion (${e.message}); kept — it is grafted again next time (harmless)`);
       continue;
     }
+    if (!fresh) { debug(`${x.inboxRef} is already gone`); continue; }
+    if (fresh.sha !== x.inboxSha) { moved(x, fresh.sha); continue; }
     try {
       if (await store.deleteRef(x.inboxRef)) { stats.refsDeleted++; debug(`deleted ${x.inboxRef}`); }
     } catch (e) {
@@ -706,4 +819,4 @@ function parseHistoryOrFail(text, repo, where) {
   }
 }
 
-module.exports = { run, readInputs, buildEntry, markSuperseded, mergeEntries, slimSummary, computeStats, ConfigError };
+module.exports = { run, readInputs, buildEntry, selectReportFiles, markSuperseded, mergeEntries, slimSummary, computeStats, ConfigError };

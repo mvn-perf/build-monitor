@@ -116,11 +116,34 @@ function buildRunRecord(s, jobs) {
   };
 }
 
+/** A positive whole number, or null (meta.json is data written by a build job). */
+function attemptOf(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** True when meta says the report was published by an attempt other than the one `run` describes. */
+function isOtherAttempt(run, meta) {
+  const metaAttempt = attemptOf(meta && meta.runAttempt);
+  const runAttempt = attemptOf(run && run.attempt);
+  return !!metaAttempt && !!runAttempt && metaAttempt !== runAttempt;
+}
+
 /**
  * Resolves the job and step an mvn-lens report directory belongs to, most
  * reliable signal first: meta.jobId → runner name → job name → job key → the
  * directory key convention `j<jobId>-s<step>`. Returns how the match was made;
- * `stale-job` when meta names a job that is not part of the latest attempt.
+ * `stale-job` when meta names a job that is not part of the latest attempt,
+ * `stale-attempt` when the report was published by another attempt and carries
+ * no job id.
+ *
+ * `run.jobs` are the jobs of the LATEST attempt (`jobs?filter=latest`), so a
+ * report published by an earlier attempt must never be joined to them by
+ * runner name, job name, job key or the key convention: those all repeat
+ * across attempts and would hang an attempt-1 report on the attempt-2 job,
+ * with a step link into the wrong log. Only a job id identifies an attempt
+ * (ids are unique per attempt), which is why it keeps its fallback-free path.
+ * The `summary` action applies the same rule (src/summary.js#attributeKeys).
  */
 function attribute(run, meta, key) {
   const jobs = run.jobs || [];
@@ -131,6 +154,8 @@ function attribute(run, meta, key) {
       job = jobs.find(j => j.id === Number(meta.jobId)) || null;
       if (!job) return { job: null, step: null, how: 'stale-job' };
       how = 'jobId';
+    } else if (isOtherAttempt(run, meta)) {
+      return { job: null, step: null, how: 'stale-attempt' };
     }
     if (!job && meta.runnerName) {
       const cands = jobs.filter(j => j.runnerName === meta.runnerName);

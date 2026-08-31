@@ -122,7 +122,7 @@ async function run(opts) {
   }
 
   const keys = inbox ? inbox.keys : [];
-  const entries = attributeKeys(keys, jobs);
+  const entries = attributeKeys(keys, jobs, attempt);
   for (const e of entries) debug(`report ${e.key}: ${e.how}${e.job ? ` job ${e.job.id} "${e.job.name}"` : ''}${e.stepNumber ? ` step ${e.stepNumber}` : ''}`);
   const thisJob = findThisJob(jobs, ctx);
   const reportsCount = keys.reduce((n, k) => n + k.reports.length, 0);
@@ -213,10 +213,13 @@ function normalizeMeta(raw) {
  * Joins inbox keys with the run's jobs: meta.jobId → meta.jobName (when
  * unique) → the key convention j<jobId>-s<step>. The step number comes from
  * meta.stepNumber, the key, or meta.stepName looked up in the job's steps.
+ * `attempt` is the attempt whose jobs are in `jobs`: a report published by an
+ * earlier attempt is left unattributed rather than joined by name to the job
+ * that re-ran (its steps are not the steps that produced that report).
  * Returns one entry per key: { key, meta, reports, summaries, label, job,
  * stepNumber, how }; `job` is null for unattributed keys.
  */
-function attributeKeys(keys, jobs) {
+function attributeKeys(keys, jobs, attempt) {
   const list = Array.isArray(jobs) ? jobs.filter(j => j && typeof j === 'object') : [];
   const out = [];
   for (const k of keys) {
@@ -228,6 +231,10 @@ function attributeKeys(keys, jobs) {
       // A job id that is not part of this attempt belongs to an earlier one: no name fallback (it would land on the re-run job).
       job = list.find(j => j.id === meta.jobId) || null;
       how = job ? 'meta.jobId' : (list.length ? 'stale-job' : 'unattributed');
+    } else if (meta && meta.runAttempt && attempt && meta.runAttempt !== attempt) {
+      // Same situation without an id: the report is from another attempt, so neither
+      // the job name nor the key may join it with a job of this attempt.
+      how = 'stale-attempt';
     } else {
       if (meta && meta.jobName) {
         const cands = list.filter(j => j.name === meta.jobName);

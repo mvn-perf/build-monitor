@@ -51,6 +51,18 @@ function validatePath(p) {
 /** True when the error is a compare-and-swap loss on a ref (retry material). */
 function isCasConflict(err) { return classifyError(err) === 'conflict'; }
 
+/**
+ * True when a ref operation failed because the ref is gone — GitHub answers
+ * 422 "Reference does not exist" to a PATCH on a ref another writer deleted
+ * between our read and our update (404 on some routes). classifyError calls
+ * that 'other', but for commitFiles it is the same situation as a lost CAS
+ * race: re-read the head (now null) and create the ref instead.
+ */
+function isMissingRef(err) {
+  if (!err || (err.status !== 422 && err.status !== 404)) return false;
+  return /Reference does not exist/i.test(String(err.body || err.message || ''));
+}
+
 /** 'refs/heads/x' / 'heads/x' / 'x' → 'heads/x', validated against git ref rules. */
 function normalizeRef(ref) {
   let r = String(ref == null ? '' : ref).trim();
@@ -244,8 +256,14 @@ class GitStore {
     }
     if (!res || !SHA_RE.test(String(res.sha || ''))) throw new GitStoreError('other', `create blob in ${this.repo}: malformed API response`);
     const local = GitStore.blobSha(buf);
-    if (res.sha.toLowerCase() !== local) warning(`blob sha mismatch in ${this.repo}: API ${res.sha}, local ${local} (upload-skip optimisation disabled for this blob)`);
-    return res.sha;
+    // The local hash is what every tree entry, the idempotence check and the
+    // upload-skip are built on: a server sha that disagrees means the bytes we
+    // uploaded are not the bytes we hashed, and every commit built from it
+    // would reference the wrong object. Fail loudly instead of committing it.
+    if (res.sha.toLowerCase() !== local) {
+      throw new GitStoreError('other', `create blob in ${this.repo}: the API returned sha ${res.sha} but the ${buf.length} uploaded byte(s) hash to ${local}; refusing to build a tree from a sha that does not match the content`);
+    }
+    return local;
   }
 
   /** git's blob hash: sha1('blob <len>\0' + bytes) — equals GitHub's sha for the same bytes. */
@@ -332,7 +350,12 @@ class GitStore {
           await sleep(waitMs);
           continue;
         }
-        if (kind !== 'conflict') throw this._wrap(e, `commit to ${ref} of ${this.repo} failed`);
+        // A ref that vanished between the read and the update is a lost race
+        // like any other: the retry below re-reads the head (null now) and the
+        // !head branch re-creates the ref. knownShas keeps the blobs uploaded
+        // so far from travelling a second time.
+        const vanished = kind !== 'conflict' && isMissingRef(e);
+        if (kind !== 'conflict' && !vanished) throw this._wrap(e, `commit to ${ref} of ${this.repo} failed`);
 
         attempts++;
         if (Date.now() >= deadline) {
@@ -341,7 +364,7 @@ class GitStore {
         // Full jitter: random(200 ms … min(10 s, 500 ms × 2^attempts)).
         const cap = Math.min(10000, 500 * Math.pow(2, attempts));
         const waitMs = 200 + Math.floor(Math.random() * Math.max(1, cap - 200));
-        debug(`commitFiles ${ref}: ref moved (${apiMessage(e)}); retry ${attempts} in ${waitMs} ms`);
+        debug(`commitFiles ${ref}: ${vanished ? 'ref deleted' : 'ref moved'} (${apiMessage(e)}); retry ${attempts} in ${waitMs} ms`);
         await sleep(waitMs);
         head = await this.readRef(ref);
         headFresh = true;
@@ -365,8 +388,8 @@ class GitStore {
           continue;
         }
       }
-      const sha = await this.createBlob(f.content);
-      if (sha.toLowerCase() === f.sha) knownShas.add(f.sha);
+      // createBlob guarantees the server sha equals the local one (or throws).
+      knownShas.add(await this.createBlob(f.content));
       uploaded.push(f.path);
     }
   }

@@ -179,6 +179,48 @@
   function parseMs(s) { if (!s) return null; var t = Date.parse(s); return isFinite(t) ? t : null; }
   function numOrNull(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
   function strOrNull(v) { return v === undefined || v === null ? null : String(v); }
+  /** A string from a scalar only: an object or an array becomes null (never "[object Object]"). */
+  function scalarStrOrNull(v) {
+    if (typeof v === 'string') return v;
+    if (typeof v === 'boolean') return String(v);
+    if (typeof v === 'number' && isFinite(v)) return String(v);
+    return null;
+  }
+
+  /** The mvn-lens summary fields the views read (history.json keeps no others). */
+  var SUMMARY_NUMBERS = ['totalMs', 'wallMs', 'cpuMs', 'gcMs', 'gcCount', 'jitMs', 'c2Ms', 'downloadMs', 'downloadBytes', 'downloadCount',
+    'moduleCount', 'testCount', 'testMs', 'threads', 'issueCount', 'startedAt', 'endedAt', 'schemaVersion'];
+  var SUMMARY_STRINGS = ['status', 'builderId', 'mavenVersion', 'jdkVersion', 'groupId', 'artifactId', 'version'];
+  var SUMMARY_ENV = ['availableProcessors', 'cpuCores', 'cpuThreads', 'memoryBytes', 'osName', 'jvmName', 'jvmVendor', 'mvnd', 'githubActions', 'c2DisabledBy'];
+  var MAX_GOALS = 50;
+  /**
+   * The summary of one report, reduced to the known keys with coerced types. A
+   * meta.json is written by an action running in someone's build job, so a
+   * crafted (or simply older) shape must never make a view throw: `goals` is
+   * always an array of strings, every timing is a number or null, every label a
+   * string or null, and `environment` a flat object of scalars (or null).
+   */
+  function normalizeSummary(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    var out = {};
+    SUMMARY_NUMBERS.forEach(function (k) { out[k] = numOrNull(raw[k]); });
+    SUMMARY_STRINGS.forEach(function (k) { out[k] = scalarStrOrNull(raw[k]); });
+    out.goals = [];
+    if (Array.isArray(raw.goals)) {
+      for (var i = 0; i < raw.goals.length && out.goals.length < MAX_GOALS; i++) {
+        var g = scalarStrOrNull(raw.goals[i]);
+        if (g !== null) out.goals.push(g);
+      }
+    }
+    out.environment = null;
+    var env = raw.environment;
+    if (env && typeof env === 'object' && !Array.isArray(env)) {
+      var e = {};
+      SUMMARY_ENV.forEach(function (k) { e[k] = typeof env[k] === 'boolean' ? env[k] : (typeof env[k] === 'number' && isFinite(env[k]) ? env[k] : scalarStrOrNull(env[k])); });
+      out.environment = e;
+    }
+    return out;
+  }
 
   /**
    * Turns a history.json object into the view model: ms timestamps, arrays
@@ -287,7 +329,7 @@
         return {
           name: strOrNull(x.name), label: strOrNull(x.label),
           path: isValidReportPath(x.path) ? x.path : null,      // the only value that becomes an iframe src / href
-          summary: x.summary && typeof x.summary === 'object' ? x.summary : null,
+          summary: normalizeSummary(x.summary),
           summarySource: strOrNull(x.summarySource), bytes: numOrNull(x.bytes),
         };
       });
@@ -352,12 +394,18 @@
     });
     return rows;
   }
-  /** 'ok' | 'failed' | 'unknown' from a summary's Maven status. */
+  /**
+   * 'ok' | 'failed' | 'unknown' from a summary's Maven status. mvn-lens emits
+   * "UNKNOWN" when the session end is missing (a cancelled job, a crashed JVM),
+   * and other statuses may appear: only a status that says FAIL or ERROR is a
+   * failure — anything unrecognised stays unknown rather than being painted red.
+   */
   function mavenStatus(summary) {
     if (!summary || !summary.status) return 'unknown';
     var s = String(summary.status).toUpperCase();
     if (s === 'OK' || s === 'SUCCESS') return 'ok';
-    return 'failed';
+    if (s.indexOf('FAIL') >= 0 || s.indexOf('ERROR') >= 0) return 'failed';
+    return 'unknown';
   }
   /** Keys whose value is the same on every row (candidates for auto-hiding); needs ≥ 2 rows. */
   function constantColumns(rows, getters) {
@@ -479,7 +527,7 @@
     isValidRunId: isValidRunId, isValidKey: isValidKey, isValidReportPath: isValidReportPath, isValidRepository: isValidRepository, safeInt: safeInt,
     parseRoute: parseRoute, routeHash: routeHash, runHref: runHref, reportHref: reportHref,
     safeHttpUrl: safeHttpUrl, repoUrl: repoUrl, runUrl: runUrl, githubRunUrl: githubRunUrl, jobUrl: jobUrl, stepUrl: stepUrl, stepLink: stepLink, workflowUrl: workflowUrl, commitUrl: commitUrl,
-    normalize: normalize, normalizeRun: normalizeRun,
+    normalize: normalize, normalizeRun: normalizeRun, normalizeSummary: normalizeSummary,
     mavenSeriesKey: mavenSeriesKey, entryKey: entryKey, seriesOf: seriesOf, seriesTitle: seriesTitle, reportRows: reportRows, mavenStatus: mavenStatus, constantColumns: constantColumns,
     rangeMs: rangeMs, defaultFilters: defaultFilters, sanitizeFilters: sanitizeFilters, applyFilters: applyFilters, runMatchesText: runMatchesText,
     runState: runState, jobState: jobState, stateLabel: stateLabel, stateClass: stateClass,

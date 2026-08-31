@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { GitHubApi, HttpError } = require('../src/github-api');
 const { GitStore, GitStoreError, validatePath, isCasConflict, BOT_NAME, BOT_EMAIL } = require('../src/gitstore');
-const { createFakeGitHub, EMPTY_TREE_SHA } = require('./fake-github');
+const { createFakeGitHub, response, EMPTY_TREE_SHA } = require('./fake-github');
 
 const REPO = 'acme/widgets';
 const fastSleep = () => new Promise(r => setImmediate(r));
@@ -176,6 +176,65 @@ test('commitFiles retries when the branch is created concurrently (Reference alr
   assert.ok(res.attempts >= 1);
   assert.equal(String(fake.store.readFile('gh-pages', 'rival.txt')), 'rival');
   assert.equal(String(fake.store.readFile('gh-pages', 'mine.txt')), 'mine');
+});
+
+test('commitFiles re-creates a ref that vanished between the read and the PATCH', async () => {
+  // The processor deletes an inbox ref right after grafting it; a `report` step
+  // of the same run is mid-publish. GitHub answers the PATCH with
+  // 422 "Reference does not exist" — that must not lose the report.
+  const { fake, store } = setup();
+  const ref = 'heads/build-monitor-inbox/77';
+  fake.store.seedBranch('build-monitor-inbox/77', { 'reports/77/j1-s3/report.html': 'grafted already' });
+  let deleted = 0;
+  fake.hook(({ method, path }) => {
+    if (method === 'PATCH' && path.includes('/git/refs/heads/build-monitor-inbox/77') && deleted === 0) {
+      deleted++;
+      fake.store.refs.delete('refs/heads/build-monitor-inbox/77');
+    }
+  });
+  const mark = fake.calls.length;
+  const res = await store.commitFiles({
+    ref,
+    files: [
+      { path: 'reports/77/j2-s4/report.html', content: '<html>mine</html>' },
+      { path: 'reports/77/j2-s4/meta.json', content: '{"key":"j2-s4"}' },
+    ],
+    sleep: fastSleep,
+  });
+  assert.equal(deleted, 1);
+  assert.equal(res.created, true, 'the writer re-created the ref instead of failing');
+  assert.equal(res.changed, true);
+  assert.ok(res.attempts >= 1, `attempts ${res.attempts}`);
+  assert.equal(fake.store.headOf('build-monitor-inbox/77'), res.sha, 'the ref exists again, at our commit');
+  assert.deepEqual(fake.store.commit(res.sha).parents, [], 'a root commit: the deleted history is gone, ours is not');
+  assert.equal(String(fake.store.readFile('build-monitor-inbox/77', 'reports/77/j2-s4/report.html')), '<html>mine</html>');
+  assert.equal(String(fake.store.readFile('build-monitor-inbox/77', 'reports/77/j2-s4/meta.json')), '{"key":"j2-s4"}');
+  assert.equal(blobPosts(fake, mark).length, 2, 'knownShas keeps the report bytes from travelling twice');
+});
+
+test('a blob sha the API does not confirm is a hard error (the tree is built from the local hash)', async () => {
+  const { fake } = setup();
+  const bogus = 'b'.repeat(40);
+  const lying = async (url, init) => {
+    const method = String((init && init.method) || 'GET').toUpperCase();
+    if (method === 'POST' && String(url).endsWith('/git/blobs')) {
+      await fake.fetch(url, init);   // the bytes are really stored; only the answer lies
+      return response(201, Buffer.from(JSON.stringify({ sha: bogus }), 'utf8'), { 'content-type': 'application/json' });
+    }
+    return fake.fetch(url, init);
+  };
+  const store = new GitStore({ api: new GitHubApi({ token: 'x', fetch: lying, maxRateLimitWaits: 0 }), repo: REPO });
+  await assert.rejects(
+    store.createBlob(Buffer.from('payload')),
+    (e) => e instanceof GitStoreError && e.kind === 'other' && /hash to/.test(e.message) && e.message.includes(bogus),
+  );
+  const mark = fake.calls.length;
+  await assert.rejects(
+    store.commitFiles({ ref: 'heads/gh-pages', files: [{ path: 'x.txt', content: 'payload' }], sleep: fastSleep }),
+    (e) => e instanceof GitStoreError && /hash to/.test(e.message),
+  );
+  assert.ok(!fake.calls.slice(mark).some(c => c.method === 'POST' && c.path.endsWith('/git/trees')), 'no tree is built from the unconfirmed sha');
+  assert.equal(fake.store.headOf('gh-pages'), null, 'nothing published');
 });
 
 test('onConflict may replace the file list; replacement blobs are uploaded', async () => {

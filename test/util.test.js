@@ -164,6 +164,10 @@ test('escapeMd neutralises Markdown table / link syntax and newlines', () => {
   assert.equal(util.escapeMd('<script>'), '\\<script\\>');
   assert.equal(util.escapeMd('back\\slash'), 'back\\\\slash');
   assert.equal(util.escapeMd('line1\nline2\r\nline3'), 'line1 line2 line3');
+  // CommonMark treats a bare CR as a line ending too: a lone CR would end the table row.
+  assert.equal(util.escapeMd('line1\rline2'), 'line1 line2');
+  assert.equal(util.escapeMd('a\r\r\nb'), 'a  b');
+  assert.ok(!/[\r\n]/.test(util.escapeMd('a\rb\nc\r\nd')));
   assert.equal(util.escapeMd(null), '');
   assert.equal(util.escapeMd(undefined), '');
   assert.equal(util.escapeMd(42), '42');

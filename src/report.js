@@ -37,6 +37,8 @@ const DEFAULT_BUDGET_MS = 180000;
 const MAX_KEY_SUFFIX = 99;
 const PERMISSION_HINT = 'grant contents: write to this job (pull requests from forks have a read-only token)';
 const NO_FILES_MODES = ['warn', 'error', 'ignore'];
+/** Where an unexpected error (a bug in this action) should be reported. */
+const ISSUES_URL = 'https://github.com/mvn-perf/build-monitor/issues';
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -70,7 +72,10 @@ function readInputs() {
  * Runs the action from process.env (INPUT_*, GITHUB_*). Expected failures
  * (no report, read-only token, rate limit, CAS budget) never throw: they end
  * as a warning + outputs + exit code 0, or an error annotation + exit code 1
- * when `fail-on-error` (or `if-no-files-found: error`) says so.
+ * when `fail-on-error` (or `if-no-files-found: error`) says so. Anything else
+ * (a bug here, an API shape this code does not handle) keeps that exit-code
+ * policy — a build is not broken by its monitoring — but its stack is printed
+ * as an error annotation instead of being hidden behind RUNNER_DEBUG.
  *
  * @param {object} [opts] { fetch, sleep } injectable for tests; also the test
  *   hooks `apiOptions` (extra GitHubApi constructor options) and `budgetMs`
@@ -373,6 +378,11 @@ function describeFailure(e) {
   return { reason: msg, detail: msg, unexpected: true };
 }
 
+/** The stack of a thrown value, falling back to its string form. */
+function stackOf(e) {
+  return e && e.stack ? String(e.stack) : String(e);
+}
+
 function finish(r, inputs, failure) {
   const failOnError = inputs ? inputs.failOnError : true;
   let exitCode = 0;
@@ -382,7 +392,13 @@ function finish(r, inputs, failure) {
     const f = describeFailure(failure);
     r.published = false;
     r.reason = f.reason;
-    if (f.unexpected) debug(failure && failure.stack ? failure.stack : String(failure));
+    // An unexpected error is a bug here (or an API shape this code does not
+    // handle): its stack goes to the log as an error annotation, so it is
+    // readable without re-running the job with RUNNER_DEBUG. The expected
+    // kinds keep the documented policy (a warning and exit code 0 unless
+    // fail-on-error), and their stack stays behind the debug flag.
+    if (f.unexpected) error(`build-monitor: unexpected error while publishing the mvn-lens report — please report it at ${ISSUES_URL}\n${stackOf(failure)}`);
+    else debug(stackOf(failure));
     const msg = `build-monitor: mvn-lens report not published: ${f.detail}`;
     if (failOnError) fail(msg); else warning(msg);
   } else if (r.noFiles) {
@@ -435,6 +451,6 @@ function statsSegments(s) {
 }
 
 module.exports = {
-  run, readInputs, findReports, readReports, reportLabels, keyFor, chooseKey, buildMeta, describeFailure, renderSummary,
-  DEFAULT_BUDGET_MS, PERMISSION_HINT,
+  run, readInputs, findReports, readReports, reportLabels, keyFor, chooseKey, buildMeta, describeFailure, finish, renderSummary,
+  DEFAULT_BUDGET_MS, PERMISSION_HINT, ISSUES_URL,
 };

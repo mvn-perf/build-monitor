@@ -187,6 +187,42 @@ test('attribute resolves a report to its job/step by jobId, runner, job name, jo
   assert.deepEqual(a, { job: null, step: null, how: 'none' });
 });
 
+test('attribute: a report of another attempt without a job id is never joined to the re-run job', () => {
+  // Run 1 was re-run: `jobs?filter=latest` returns the attempt-2 jobs only. The
+  // attempt-1 report kept its own runner name / job name / job key, and every
+  // one of them matches the attempt-2 job — the join must be refused instead.
+  const s = fakeRun({ id: 1, baseMs: T0, attempt: 2, jobs: [
+    { id: 21, name: 'Java 25 (ubuntu-latest)', runnerName: 'GitHub Actions 2', steps: [
+      { number: 1, name: 'Set up job', start: 1, end: 2 }, { number: 3, name: 'Build with Maven', start: 2, end: 60 },
+    ] },
+  ] });
+  const run = R.buildRunRecord(s, s.jobs);
+  assert.equal(run.attempt, 2);
+  const stale = { runAttempt: 1, jobId: null, runnerName: 'GitHub Actions 2', jobName: 'Java 25 (ubuntu-latest)', jobKey: 'java', stepNumber: 3, stepName: 'Build with Maven' };
+
+  assert.deepEqual(R.attribute(run, stale, 'java-a1b2c3'), { job: null, step: null, how: 'stale-attempt' },
+    'neither the runner name, the job name nor the job key may reach the attempt-2 job');
+  assert.deepEqual(R.attribute(run, stale, 'j21-s3'), { job: null, step: null, how: 'stale-attempt' },
+    'the key convention is refused too: it names a job of this attempt, not of attempt 1');
+
+  // The report of THIS attempt still joins by every signal it used to.
+  const current = Object.assign({}, stale, { runAttempt: 2 });
+  let a = R.attribute(run, current, 'java-a1b2c3');
+  assert.equal(a.how, 'runnerName');
+  assert.equal(a.job.id, 21);
+  assert.equal(a.step.number, 3);
+  a = R.attribute(run, Object.assign({}, current, { runnerName: null }), 'java-a1b2c3');
+  assert.equal(a.how, 'jobName');
+  // A job id is the one signal that identifies an attempt on its own (ids never repeat).
+  a = R.attribute(run, Object.assign({}, stale, { jobId: 21 }), 'x');
+  assert.equal(a.how, 'jobId', 'an attempt-1 meta naming a job of this attempt is that job (ids are unique per attempt)');
+  assert.deepEqual(R.attribute(run, Object.assign({}, stale, { jobId: 999 }), 'x'), { job: null, step: null, how: 'stale-job' });
+  // A meta without an attempt (or a run without one) keeps the old fallbacks: nothing to compare.
+  assert.equal(R.attribute(run, Object.assign({}, stale, { runAttempt: null }), 'x').how, 'runnerName');
+  assert.equal(R.attribute(run, Object.assign({}, stale, { runAttempt: 'two' }), 'x').how, 'runnerName');
+  assert.equal(R.attribute(Object.assign({}, run, { attempt: null }), stale, 'x').how, 'runnerName');
+});
+
 test('needsRefresh: incomplete, changed, re-run, forced or explicitly requested runs are fetched again', () => {
   const existing = { id: 5, status: 'completed', updatedAt: '2026-01-01T00:00:00Z', attempt: 1 };
   const same = { id: 5, status: 'completed', updated_at: '2026-01-01T00:00:00Z', run_attempt: 1 };

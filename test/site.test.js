@@ -127,6 +127,21 @@ test('inline dataset round-trips, including the gzip embedding', () => {
   assert.equal(decodeEmbedded(raw2).runs.length, big.runs.length);
 });
 
+test('placeholders are substituted in one pass: content that looks like a placeholder is never re-substituted', () => {
+  const history = smokeHistory();
+  history.runs[0].title = 'see __APP_JS__ / __MODEL_JS__ / __VENDOR_JS__ / __DATA_JSON__';
+  const html = renderIndexHtml({ title: 'CI __APP_CSS__', dataset: history, gzipThreshold: null });
+  assert.ok(html.includes('<title>CI __APP_CSS__</title>'), 'a placeholder-looking title is inserted as text, not re-scanned');
+  assert.ok(html.includes('Chart.js v4'), 'Chart.js still inlined');
+  assert.ok(html.includes('root.BuildMonitorModel = api'), 'model.js still inlined');
+  assert.ok(html.includes('var M = window.BuildMonitorModel;'), 'app.js still inlined');
+  for (const ph of ['__TITLE__', '__APP_CSS__', '__DATA_JSON__', '__VENDOR_JS__', '__MODEL_JS__', '__APP_JS__']) {
+    assert.equal(html.split('\n').filter(l => l.trim() === ph).length, 0, ph + ' has no placeholder line left');
+  }
+  const data = decodeEmbedded(extractData(html));
+  assert.equal(data.runs[0].title, 'see __APP_JS__ / __MODEL_JS__ / __VENDOR_JS__ / __DATA_JSON__', 'the literal text survives inside the dataset');
+});
+
 test('embedJson neutralises script-closing and comment sequences while staying valid JSON', () => {
   const s = embedJson({ a: '</script><!-- x -->', b: 'line sep' });
   assert.ok(!/<\/script/i.test(s));
@@ -412,6 +427,76 @@ test('smoke: the app renders every route from an inline dataset without a browse
     assert.match(sandbox.document.title, /#13/, 'the run page replaced the pending state');
     assert.match(viewText(dom), /Jobs & steps/);
   });
+});
+
+test('smoke: the trends strip says "2 series", never "seriess"', async () => {
+  const { dom } = await bootApp(JSON.stringify(smokeHistory()));
+  const text = viewText(dom);
+  assert.ok(!/seriess/.test(text), 'no doubled plural: ' + text.slice(0, 400));
+  assert.match(text, /Maven total time of 2 series over the runs in range/);
+});
+
+test('smoke: a crafted summary does not take the whole view down', async () => {
+  const h = smokeHistory();
+  // goals as a string, totalMs as an object, environment as an array — a meta.json is written on a build runner.
+  h.runs[0].mvnLens[0].reports[0].summary = { goals: 'clean verify', totalMs: { ms: 5 }, wallMs: 1000, status: 'OK', environment: ['nope'], startedAt: 'yesterday', endedAt: {} };
+  for (const hash of ['#/reports', '#/run/5000000001', '#/report/5000000001/j91-s4']) {
+    const { dom } = await bootApp(JSON.stringify(h), hash);
+    const text = viewText(dom);
+    assert.ok(!text.includes('failed to render'), hash + ': ' + text.slice(0, 300));
+  }
+});
+
+test('smoke: an UNKNOWN Maven status is dim with the raw status, not a red "Failed" badge', async () => {
+  const h = smokeHistory();
+  const rep = h.runs[0].mvnLens[0].reports[0];
+  rep.summary = Object.assign({}, rep.summary, { status: 'UNKNOWN' });
+  const { dom } = await bootApp(JSON.stringify(h), '#/reports');
+  const dim = dom.app.querySelectorAll('span').filter(s => s.getAttribute('title') === 'Maven status UNKNOWN');
+  assert.equal(dim.length, 1, 'one dim status cell carrying the raw status');
+  assert.equal(dim[0].textContent, 'UNKNOWN');
+  assert.ok(dim[0].className.includes('dim'));
+  // The viewer of that report shows the same, and the report is not counted as a Maven failure.
+  const { sandbox: s2, dom: d2 } = await bootApp(JSON.stringify(h), '#/report/5000000001/j91-s4');
+  assert.ok(d2.app.querySelectorAll('span').some(s => s.getAttribute('title') === 'Maven status UNKNOWN'), 'viewer bar');
+  assert.equal(s2.buildMonitor.model.mavenStatus({ status: 'UNKNOWN' }), 'unknown');
+});
+
+test('smoke: the header is rebuilt when the pending poll loads a dataset', async () => {
+  let calls = 0;
+  const fetchImpl = () => {
+    calls++;
+    return calls === 1
+      ? Promise.resolve({ status: 404, ok: false, text: () => Promise.resolve('') })
+      : Promise.resolve({ status: 200, ok: true, text: () => Promise.resolve(JSON.stringify(smokeHistory())) });
+  };
+  const { sandbox, dom, intervalFns } = await bootApp('', '#/reports', { fetch: fetchImpl });
+  const header = () => dom.app.querySelectorAll('header')[0].textContent;
+  assert.match(header(), /Updated —/);
+  assert.match(header(), /0 runs/);
+  assert.ok(!hrefs(dom).includes('https://github.com/acme/widgets'), 'the empty shell has no repository link');
+  await intervalFns[intervalFns.length - 1]();
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(sandbox.buildMonitor.data().runs.length, 2, 'the dataset was loaded by the poll');
+  assert.ok(!header().includes('Updated —'), 'the header carries the new generatedAt: ' + header());
+  assert.match(header(), /2 runs · 3 reports/);
+  assert.ok(header().includes('acme/widgets'), 'repository named in the header');
+  assert.ok(hrefs(dom).includes('https://github.com/acme/widgets'), 'repository link');
+});
+
+test('smoke: the pending page gives up after 20 polls and explains which runs never arrive', async () => {
+  const fetched = [];
+  const fetchImpl = (url) => { fetched.push(url); return Promise.resolve({ status: 404, ok: false, text: () => Promise.resolve('') }); };
+  const { sandbox, dom, intervalFns } = await bootApp(JSON.stringify(smokeHistory()), '#/run/9999999999', { fetch: fetchImpl });
+  assert.match(viewText(dom), /[Ww]aiting for the Build monitor workflow/);
+  const tick = intervalFns[intervalFns.length - 1];
+  for (let i = 0; i < 25; i++) { tick(); await new Promise(r => setTimeout(r, 0)); }
+  assert.equal(fetched.length, 20, 'stopped after 20 checks (~10 min), not polling forever');
+  const status = sandbox.document.getElementById('bm-poll-status').textContent;
+  assert.match(status, /Stopped checking data\/history\.json after 20 attempts \(10 min\)/);
+  assert.match(status, /fork/, 'names the fork pull request case');
+  assert.match(status, /workflow the Build monitor does not monitor/, 'names the unmonitored workflow case');
+  assert.ok(hrefs(dom).includes('https://github.com/acme/widgets/actions/runs/9999999999'), 'the GitHub run link stays');
 });
 
 test('smoke: a job-only attribution shows one GitHub job link and no step link in the viewer', async () => {

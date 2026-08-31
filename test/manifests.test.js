@@ -192,6 +192,40 @@ const EXPECTED = {
   },
 };
 
+/**
+ * The runner evaluates `${{ … }}` everywhere in a manifest — descriptions and
+ * comments included — while it loads the action, and only the `github` and
+ * `inputs` contexts exist there. An expression anywhere else ("Unrecognized
+ * named-value") makes every job using the action fail before its first step;
+ * that regression once broke every assertj job. scripts/check-syntax.js guards
+ * it as a lint; this makes it a test.
+ *
+ * Returns one problem per offending line/value: the raw scan catches comments
+ * and keys (which the YAML reader drops), the parsed scan catches values that
+ * merely look like an input default.
+ */
+const EXPR = '${' + '{';
+
+function expressionProblems(text) {
+  const problems = [];
+  String(text).split(/\r?\n/).forEach((line, i) => {
+    if (!line.includes(EXPR)) return;
+    if (!/^\s+default:\s/.test(line)) problems.push(`line ${i + 1}: expression outside an input default: ${line.trim()}`);
+    else if (!/^\s+default:\s*\$\{\{\s*(github|inputs)\./.test(line)) problems.push(`line ${i + 1}: only the github and inputs contexts exist in a manifest: ${line.trim()}`);
+  });
+  let doc;
+  try { doc = parseYaml(text); } catch (e) { return problems.concat(`the manifest does not parse: ${e.message}`); }
+  const walk = (node, path) => {
+    if (typeof node === 'string') {
+      if (node.includes(EXPR) && !/^inputs\.[^.]+\.default$/.test(path)) problems.push(`${path || '(root)'}: expression outside an input default: ${node.trim()}`);
+      return;
+    }
+    if (node && typeof node === 'object') for (const [k, v] of Object.entries(node)) walk(v, path ? `${path}.${k}` : k);
+  };
+  walk(doc, '');
+  return problems;
+}
+
 /** Every .js file under src/ plus the manifest's own directory (report/, summary/), read once. */
 function sourcesFor(manifest) {
   const files = [];
@@ -328,6 +362,11 @@ for (const [manifest, spec] of Object.entries(EXPECTED)) {
     assert.deepStrictEqual(problems, [], `${manifest}:\n  ${problems.join('\n  ')}`);
   });
 
+  test(`${manifest}: no ${EXPR} … }} outside an input default`, { skip }, () => {
+    const problems = expressionProblems(fs.readFileSync(file, 'utf8'));
+    assert.deepStrictEqual(problems, [], `${manifest}: the runner evaluates expressions while loading the action, so one outside an input default fails every job that uses it:\n  ${problems.join('\n  ')}`);
+  });
+
   test(`${manifest}: every input name is read by the sources`, { skip }, () => {
     const doc = parseYaml(fs.readFileSync(file, 'utf8'));
     const sources = sourcesFor(manifest);
@@ -341,10 +380,48 @@ for (const [manifest, spec] of Object.entries(EXPECTED)) {
   });
 }
 
+test('the expression check accepts input defaults and rejects descriptions, comments and other contexts', () => {
+  const lines = [
+    'name: Demo',
+    'description: Does things.',
+    'branding:',
+    '  icon: activity',
+    '  color: blue',
+    'inputs:',
+    '  github-token:',
+    '    description: The token.',
+    '    default: ${{ github.token }}',
+    '  label:',
+    "    description: 'A label.'",
+    "    default: ''",
+    'outputs:',
+    '  key:',
+    '    description: A key.',
+    'runs:',
+    '  using: node24',
+    '  main: index.js',
+  ];
+  assert.deepStrictEqual(expressionProblems(lines.join('\n')), [], 'a manifest whose only expression is an input default is fine');
+
+  const rejects = [
+    ['description', l => l.map(x => (x === 'description: Does things.' ? 'description: Publishes ${{ github.repository }}.' : x))],
+    ['input description', l => l.map(x => (x === '    description: The token.' ? '    description: Defaults to ${{ github.token }}.' : x))],
+    ['output description', l => l.map(x => (x === '    description: A key.' ? '    description: Key of ${{ github.run_id }}.' : x))],
+    ['folded description', l => l.map(x => (x === '    description: The token.' ? '    description: >-\n      Token, ${{ github.token }} by default.' : x))],
+    ['comment', l => ['# uses ${{ github.token }}'].concat(l)],
+    ['runs.main', l => l.map(x => (x === '  main: index.js' ? '  main: ${{ inputs.entry }}' : x))],
+    ['another context in a default', l => l.map(x => (x === '    default: ${{ github.token }}' ? '    default: ${{ secrets.GITHUB_TOKEN }}' : x))],
+  ];
+  for (const [what, mutate] of rejects) {
+    const problems = expressionProblems(mutate(lines).join('\n'));
+    assert.ok(problems.length, `an expression in the ${what} must be rejected`);
+  }
+});
+
 test('the three manifests declare distinct action names', () => {
   const present = Object.keys(EXPECTED).filter(m => fs.existsSync(path.join(root, m)));
   const names = present.map(m => String(parseYaml(fs.readFileSync(path.join(root, m), 'utf8')).name || '').trim());
   assert.strictEqual(new Set(names.filter(Boolean)).size, names.length, `duplicate action names: ${names.join(' | ')}`);
 });
 
-module.exports = { parseYaml };
+module.exports = { parseYaml, expressionProblems };

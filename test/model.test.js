@@ -215,6 +215,39 @@ test('normalize survives hostile or empty input', () => {
   assert.equal(ghes.serverUrl, 'https://ghe.corp.example', 'trailing slash trimmed');
 });
 
+test('normalizeSummary keeps the known keys with coerced types and drops anything else', () => {
+  const s = M.normalizeSummary({ goals: 'clean verify', totalMs: { ms: 5 }, wallMs: 1000, status: ['FAILED'], jdkVersion: 25, threads: '4', environment: ['nope'], extra: 'dropped' });
+  assert.deepEqual(s.goals, [], 'a string is not a goal list');
+  assert.equal(s.totalMs, null, 'an object is not a duration');
+  assert.equal(s.wallMs, 1000);
+  assert.equal(s.status, null, 'an array is not a status');
+  assert.equal(s.jdkVersion, '25', 'a number becomes its string');
+  assert.equal(s.threads, null, 'a numeric string is not a number');
+  assert.equal(s.environment, null, 'an array is not an environment');
+  assert.equal(s.extra, undefined, 'unknown keys are dropped');
+  assert.deepEqual(M.normalizeSummary({ goals: ['clean', 'verify', { x: 1 }, null] }).goals, ['clean', 'verify']);
+  assert.equal(M.normalizeSummary({ goals: new Array(200).fill('x') }).goals.length, 50, 'the goal list is capped');
+  assert.equal(M.normalizeSummary(null), null);
+  assert.equal(M.normalizeSummary([1, 2]), null);
+  assert.equal(M.normalizeSummary('OK'), null);
+  const env = M.normalizeSummary({ environment: { mvnd: true, availableProcessors: 8, osName: 'Linux', junk: { a: 1 } } }).environment;
+  assert.deepEqual(env, { availableProcessors: 8, cpuCores: null, cpuThreads: null, memoryBytes: null, osName: 'Linux', jvmName: null, jvmVendor: null, mvnd: true, githubActions: null, c2DisabledBy: null });
+});
+
+test('a crafted summary in the history never makes the model throw', () => {
+  const raw = rawHistory();
+  raw.runs[0].mvnLens[0].reports[0].summary = { goals: 'clean verify', totalMs: { n: 1 }, environment: ['x'], status: 'OK', startedAt: 'yesterday' };
+  const model = M.normalize(raw);
+  const run = model.byId['501'];
+  assert.deepEqual(run.mvnLens[0].summary.goals, []);
+  assert.equal(run.mvnLens[0].summary.totalMs, null);
+  assert.equal(run.mvnLens[0].summary.startedAt, null);
+  assert.doesNotThrow(() => M.runMatchesText(run, 'clean'), 'the text search reads summary.goals');
+  assert.equal(M.applyFilters(model.runs, { range: 'all', text: 'clean' }, NOW).length, 0);
+  assert.doesNotThrow(() => M.reportRows(model.runs, { maven: 'ok' }));
+  assert.ok(M.seriesOf(model.runs).length >= 1);
+});
+
 test('report path re-validation agrees with src/history.isValidReportPath', () => {
   const cases = [
     'reports/501/j91-s4/report.html',
@@ -332,7 +365,26 @@ test('constantColumns finds columns with a single distinct value (needs at least
   assert.deepEqual(M.constantColumns([], getters), []);
 });
 
-test('mavenStatus and state helpers', () => {
+test('mavenStatus: OK/SUCCESS is ok, FAIL/ERROR is failed, anything else (mvn-lens "UNKNOWN") is unknown', () => {
+  for (const s of ['OK', 'ok', 'SUCCESS', 'Success']) assert.equal(M.mavenStatus({ status: s }), 'ok', s);
+  for (const s of ['FAILED', 'failure', 'BUILD FAILURE', 'ERROR', 'internal_error']) assert.equal(M.mavenStatus({ status: s }), 'failed', s);
+  // mvn-lens sets UNKNOWN when the session never ended (a cancelled job): not a failure.
+  for (const s of ['UNKNOWN', 'CANCELLED', 'weird', '']) assert.equal(M.mavenStatus({ status: s }), 'unknown', JSON.stringify(s));
+  assert.equal(M.mavenStatus({}), 'unknown');
+  assert.equal(M.mavenStatus(null), 'unknown');
+});
+
+test('the Maven filter counts an UNKNOWN status as neither ok nor failed', () => {
+  const raw = rawHistory();
+  raw.runs[0].mvnLens[0].reports[0].summary.status = 'UNKNOWN';
+  const model = M.normalize(raw);
+  assert.equal(M.reportRows(model.runs).find(r => r.entry.key === 'j91-s4').mavenStatus, 'unknown');
+  assert.equal(M.reportRows(model.runs, { maven: 'failed' }).length, 1, 'only the genuinely failed report');
+  assert.equal(M.reportRows(model.runs, { maven: 'ok' }).length, 1);
+  assert.equal(M.reportRows(model.runs).length, 3, 'unfiltered rows are unaffected');
+});
+
+test('state helpers', () => {
   assert.equal(M.mavenStatus({ status: 'OK' }), 'ok');
   assert.equal(M.mavenStatus({ status: 'FAILED' }), 'failed');
   assert.equal(M.mavenStatus(null), 'unknown');

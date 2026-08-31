@@ -242,8 +242,12 @@ function fmtBytes(n) {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-/** Escapes the characters that would break a Markdown table cell / link text. */
-function escapeMd(s) { return String(s == null ? '' : s).replace(/[\\*_`|\[\]<>]/g, '\\$&').replace(/\r?\n/g, ' '); }
+/**
+ * Escapes the characters that would break a Markdown table cell / link text.
+ * Every line ending — CRLF, LF and a lone CR (CommonMark treats a bare CR as a
+ * line ending too, so it would end the table row) — becomes a space.
+ */
+function escapeMd(s) { return String(s == null ? '' : s).replace(/[\\*_`|\[\]<>]/g, '\\$&').replace(/\r\n?|\n/g, ' '); }
 
 module.exports = {
   getInput, getBooleanInput, getIntInput, parseList, setOutput, appendSummary,

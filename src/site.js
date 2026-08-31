@@ -19,6 +19,8 @@ const SITE_SRC = path.join(__dirname, '..', 'site');
 /** Inline datasets above this many bytes are gzip-embedded ("gzip:" + base64). */
 const DEFAULT_GZIP_THRESHOLD = 256 * 1024;
 const DATA_BLOCK_ID = 'build-monitor-data';
+/** The template placeholders, substituted in one single pass (see renderIndexHtml). */
+const PLACEHOLDER_RE = /__TITLE__|__APP_CSS__|__DATA_JSON__|__VENDOR_JS__|__MODEL_JS__|__APP_JS__/g;
 
 let assetCache = null;
 function assets() {
@@ -62,14 +64,18 @@ function renderIndexHtml(p) {
       payload = 'gzip:' + zlib.gzipSync(Buffer.from(JSON.stringify(o.dataset), 'utf8'), { level: 9 }).toString('base64');
     }
   }
-  // Replacement callbacks: a "$&" inside the CSS/JS must never be interpreted.
-  return a.template
-    .replace(/__TITLE__/g, () => escapeHtml(title))
-    .replace('__APP_CSS__', () => a.css)
-    .replace('__DATA_JSON__', () => payload)
-    .replace('__VENDOR_JS__', () => a.vendor)
-    .replace('__MODEL_JS__', () => a.model)
-    .replace('__APP_JS__', () => a.app);
+  const values = {
+    __TITLE__: escapeHtml(title),
+    __APP_CSS__: a.css,
+    __DATA_JSON__: payload,
+    __VENDOR_JS__: a.vendor,
+    __MODEL_JS__: a.model,
+    __APP_JS__: a.app,
+  };
+  // ONE pass over the template: a substituted value is never scanned again, so an
+  // inlined dataset (or a title) containing the literal text of a later placeholder
+  // cannot swallow it. The callback also keeps "$&" inside the CSS/JS uninterpreted.
+  return a.template.replace(PLACEHOLDER_RE, (m) => values[m]);
 }
 
 /**

@@ -19,10 +19,13 @@ const { GitHubApi } = require('./github-api');
  * whose name is the job key / a matrix expansion of it.
  *
  * Step: the explicit `stepName`, else the step that was running when the
- * report was written. The Jobs API lags the runner by a few seconds, so the
- * Maven step may still show as in_progress: a step whose window contains the
- * report's mtime wins over "the last completed step"; when the snapshot is too
- * old to decide, it is re-fetched a couple of times.
+ * report was written — a step whose window contains the report's mtime and that
+ * had already been running for a second when the file appeared (the next step
+ * starts in the same truncated second, and no Maven build produces a report
+ * within a second of starting). The Jobs API lags the runner by a few seconds,
+ * so the Maven step may still show as in_progress: such a window still wins over
+ * "the last completed step"; when the snapshot is too old to decide, it is
+ * re-fetched a couple of times.
  *
  * @param {object} ctx { repository, runId, runAttempt, jobKey, jobName, runnerName, reportWrittenAt }
  * @param {string} token
@@ -98,7 +101,17 @@ async function locateJobAndStep(ctx, token, stepName, opts) {
     const completed = steps.filter(s => s.status === 'completed' && s.conclusion !== 'skipped');
     if (at) {
       // The step whose window contains the report's mtime produced it (lag-safe).
-      const containing = steps.filter(s => s.started_at && Date.parse(s.started_at) <= at + 1000 && (!s.completed_at || Date.parse(s.completed_at) >= at - 1000) && s.conclusion !== 'skipped');
+      // mvn-lens writes report.html as the Maven session ends, and the Jobs API
+      // truncates timestamps to whole seconds: the next step's started_at can be
+      // up to a second *before* the mtime, so plain containment would attribute
+      // the report to the step after Maven. A step must therefore have been
+      // running for a full second before the file was written to be a candidate;
+      // only when that leaves nothing does the +1 s tolerance apply, so a really
+      // short step that did write the file is still found.
+      const contains = (s, startedBy) => s.started_at && Date.parse(s.started_at) <= startedBy
+        && (!s.completed_at || Date.parse(s.completed_at) >= at - 1000) && s.conclusion !== 'skipped';
+      const settled = steps.filter(s => contains(s, at - 1000));
+      const containing = settled.length ? settled : steps.filter(s => contains(s, at + 1000));
       if (containing.length) { step = containing[containing.length - 1]; how += '/report-time'; break; }
       const before = completed.filter(s => s.completed_at && Date.parse(s.completed_at) <= at + 1000);
       const snapshotStale = !steps.some(s => s.status === 'in_progress') && before.length && Date.parse(before[before.length - 1].completed_at) < at - 1000;

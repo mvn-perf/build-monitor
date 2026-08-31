@@ -21,6 +21,8 @@
   var BASE_TITLE = document.title || 'Build monitor';
   var STORAGE_PREFIX = 'build-monitor.filters.';
   var POLL_MS = 30000;
+  /** Pending pages stop polling after this many fruitless checks (~10 minutes). */
+  var MAX_POLLS = 20;
   var HISTORY_FILE = 'data/history.json';
   var SPARK_CAP = 50;
 
@@ -91,6 +93,10 @@
     REPO = DATA.repository || ''; REPO_URL = DATA.repositoryUrl;
     filters = loadFilters();
     LOAD_ERROR = null;
+    // The header shows the dataset (repository link, generatedAt, run and report
+    // counts), so it must be rebuilt — a pending page that polled its dataset in
+    // would otherwise keep the "Updated — · 0 runs" shell it was created with.
+    navEl = null;
   }
 
   // ------------------------------------------------------------------------
@@ -126,6 +132,22 @@
     return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short' });
   }
   function badge(state) { var cls = M.stateClass(state); return h('span', { class: 'badge ' + cls }, [h('span', { class: 'dot' }), M.stateLabel(state)]); }
+  /**
+   * Maven result of a report: a green / red badge for a status that says so,
+   * and the raw status shown dim for anything else — mvn-lens writes "UNKNOWN"
+   * when the session never ended (a cancelled job), which is not a failure.
+   */
+  function mavenBadge(summary, status) {
+    var st = status || M.mavenStatus(summary);
+    if (st === 'ok') return badge('success');
+    if (st === 'failed') return badge('failure');
+    var raw = summary && summary.status ? String(summary.status) : '';
+    return h('span', { class: 'dim', title: raw ? 'Maven status ' + raw : 'The report carries no Maven status', text: raw || '—' });
+  }
+  function mavenColor(summary) {
+    var st = M.mavenStatus(summary);
+    return st === 'ok' ? cssVar('--good') : (st === 'failed' ? cssVar('--critical') : cssVar('--muted'));
+  }
   function link(href, text, cls, title) { return h('a', { href: href, class: cls || null, title: title || null }, text); }
   /** External link — the single choke point: anything that is not https on the server host renders as plain text. */
   function extLink(href, text, cls, title) {
@@ -151,7 +173,8 @@
     return cssVar('--muted');
   }
   function seriesColors() { var c = []; for (var i = 1; i <= 8; i++) c.push(cssVar('--series-' + i)); return c; }
-  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+  /** "1 run" / "2 runs" — a word that is its own plural ("series") keeps its form. */
+  function plural(n, word) { return n + ' ' + word + (n === 1 || word === 'series' ? '' : 's'); }
   function entryTitle(e) {
     var t = e.jobName || 'unattributed';
     if (e.stepName) t += ' › ' + e.stepName; else if (e.stepNumber) t += ' › step ' + e.stepNumber;
@@ -320,7 +343,7 @@
       .map(function (p) { return { x: p.run.createdMs, y: p.summary.totalMs / 1000, p: p }; })
       .sort(function (a, b) { return a.x - b.x; });
     if (!pts.length) return null;
-    var colors = pts.map(function (q) { return M.mavenStatus(q.p.summary) === 'ok' ? cssVar('--good') : cssVar('--critical'); });
+    var colors = pts.map(function (q) { return mavenColor(q.p.summary); });
     return makeChart(canvas, {
       type: 'line',
       data: { datasets: [{ label: 'Maven total', data: pts, parsing: false, showLine: true, borderColor: withAlpha(cssVar('--series-2'), 0.7), borderWidth: 1.5, tension: 0,
@@ -407,7 +430,7 @@
     { id: 'wall', label: 'Wall', num: true, cell: function (row) { return h('td', { class: 'num dim', text: fmtMs(row.summary ? row.summary.wallMs : null) }); } },
     { id: 'cpu', label: 'CPU', num: true, cell: function (row) { return h('td', { class: 'num dim', text: fmtMs(row.summary ? row.summary.cpuMs : null) }); } },
     { id: 'gc', label: 'GC', num: true, hideable: true, key: function (row) { return row.summary ? fmtMs(row.summary.gcMs) : '—'; }, cell: function (row) { return h('td', { class: 'num dim', text: this.key(row) }); } },
-    { id: 'status', label: 'Status', hideable: true, key: function (row) { return row.summary && row.summary.status ? String(row.summary.status) : ''; }, cell: function (row) { var st = row.mavenStatus; return h('td', null, st === 'unknown' ? h('span', { class: 'dim', text: '—' }) : badge(st === 'ok' ? 'success' : 'failure')); } },
+    { id: 'status', label: 'Status', hideable: true, key: function (row) { return row.summary && row.summary.status ? String(row.summary.status) : ''; }, cell: function (row) { return h('td', null, mavenBadge(row.summary, row.mavenStatus)); } },
     { id: 'modules', label: 'Modules', num: true, hideable: true, key: function (row) { return row.summary && row.summary.moduleCount !== undefined && row.summary.moduleCount !== null ? String(row.summary.moduleCount) : ''; }, cell: function (row) { return h('td', { class: 'num dim', text: this.key(row) }); } },
     { id: 'jdk', label: 'JDK', hideable: true, key: function (row) { return row.summary && row.summary.jdkVersion ? String(row.summary.jdkVersion) : ''; }, cell: function (row) { return h('td', { class: 'dim small', text: this.key(row) }); } },
     { id: 'maven', label: 'Maven', hideable: true, key: function (row) { var s = row.summary; return s ? [s.mavenVersion ? String(s.mavenVersion) : null, s.environment && s.environment.mvnd ? 'mvnd' : null].filter(Boolean).join(' · ') : ''; }, cell: function (row) { return h('td', { class: 'dim small', text: this.key(row) }); } },
@@ -475,7 +498,7 @@
       h('span', null, [h('b', { text: wf.name || run.workflowName || 'workflow' }), ' ', link(M.runHref(run), '#' + run.runNumber, null, 'Run details')]),
       h('span', { class: 'sep', text: '·' }), h('span', { text: run.branch || '' }),
       h('span', { class: 'sep', text: '·' }), h('span', { title: entry.attribution ? 'attributed by ' + entry.attribution : null }, [h('b', { text: entry.jobName || 'unattributed' }), entry.stepName ? ' › ' + entry.stepName : '', entry.label ? h('span', { class: 'dim', text: ' · ' + entry.label }) : null]),
-      s ? [h('span', { class: 'sep', text: '·' }), h('span', null, ['Maven ', h('b', { text: fmtMs(s.totalMs) }), ' ', badge(M.mavenStatus(s) === 'ok' ? 'success' : M.mavenStatus(s) === 'failed' ? 'failure' : 'neutral')])] : null,
+      s ? [h('span', { class: 'sep', text: '·' }), h('span', null, ['Maven ', h('b', { text: fmtMs(s.totalMs) }), ' ', mavenBadge(s)])] : null,
       entry.superseded ? [h('span', { class: 'sep', text: '·' }), h('span', { class: 'chip muted', title: 'Replaced by the report of a later attempt', text: 'superseded' })] : null,
       reports.length > 1 ? h('select', { 'aria-label': 'Report file', onchange: function (ev) { viewerIndex = Number(ev.target.value) || 0; render(); } }, reports.map(function (x, i) { return h('option', { value: String(i), selected: i === viewerIndex ? true : null, text: x.name || x.path.split('/').pop() }); })) : null,
     ]);
@@ -882,10 +905,16 @@
     return h('div', { class: 'notice ' + (err.kind === '404' ? '' : 'warn') }, body);
   }
 
-  var poll = { timer: null, lastAt: null, lastResult: null, active: false };
+  var poll = { timer: null, lastAt: null, lastResult: null, active: false, count: 0, route: null, gaveUp: false };
   function pollStatusText() {
-    var t = 'Checking ' + HISTORY_FILE + ' every ' + Math.round(POLL_MS / 1000) + ' s';
     if (location.protocol === 'file:') return 'Automatic refresh is not possible from the file system — reload the page once the history has been published.';
+    if (poll.gaveUp) {
+      return 'Stopped checking ' + HISTORY_FILE + ' after ' + MAX_POLLS + ' attempts (' + Math.round(MAX_POLLS * POLL_MS / 60000) + ' min). '
+        + 'Some runs never reach the history: a run of a pull request from a fork cannot publish a report (its token is read-only), '
+        + 'and a run of a workflow the Build monitor does not monitor is never ingested. '
+        + 'Open the run on GitHub with the link above to check it, then reload this page.';
+    }
+    var t = 'Checking ' + HISTORY_FILE + ' every ' + Math.round(POLL_MS / 1000) + ' s';
     if (poll.lastAt) t += ' · last check ' + new Date(poll.lastAt).toLocaleTimeString() + (poll.lastResult ? ' (' + poll.lastResult + ')' : '');
     return t + '.';
   }
@@ -894,10 +923,19 @@
     if (route.name === 'report') { var r = model.byId[route.runId]; return !!(r && r.mvnLens.some(function (e) { return e.key === route.key; })); }
     return true;
   }
-  function startPolling() {
-    if (poll.active) return;
+  /**
+   * Polls data/history.json while a pending view is shown. It gives up after
+   * MAX_POLLS fruitless checks: a run of a fork pull request or of an
+   * unmonitored workflow is never ingested, and such a page would poll forever.
+   * The counter is per pending route, so another unknown run starts fresh.
+   */
+  function startPolling(route) {
+    var key = route ? M.routeHash(route) : '';
+    if (poll.route !== key) { poll.route = key; poll.count = 0; poll.gaveUp = false; }
+    if (poll.active || poll.gaveUp) return;
     poll.active = true;
     poll.timer = setInterval(function () {
+      if (!poll.active) return;                    // stopped between two ticks
       fetchHistory('no-store').then(function (raw) {
         poll.lastAt = Date.now();
         var route = M.parseRoute(location.hash);
@@ -908,14 +946,19 @@
           render();
         } else {
           poll.lastResult = 'not there yet';
-          updatePollStatus();
+          countFruitlessPoll();
         }
       }, function (e) {
         poll.lastAt = Date.now();
         poll.lastResult = e && e.kind === '404' ? 'not published yet' : ('error: ' + (e && e.message || e));
-        updatePollStatus();
+        countFruitlessPoll();
       });
     }, POLL_MS);
+  }
+  function countFruitlessPoll() {
+    poll.count++;
+    if (poll.count >= MAX_POLLS) { stopPolling(); poll.gaveUp = true; }
+    updatePollStatus();
   }
   function stopPolling() { if (poll.timer) clearInterval(poll.timer); poll.timer = null; poll.active = false; }
   function updatePollStatus() { var el = document.getElementById('bm-poll-status'); if (el) el.textContent = pollStatusText(); }
@@ -984,7 +1027,7 @@
     document.body.className = viewerMode ? 'viewer-mode' : '';
     Array.prototype.forEach.call(navEl.querySelectorAll('a'), function (a) { a.classList.toggle('active', a.getAttribute('data-route') === route.name || (route.name === 'report' && a.getAttribute('data-route') === 'reports') || (route.name === 'run' && a.getAttribute('data-route') === 'builds')); });
     document.title = title;
-    if (pending && location.protocol !== 'file:') startPolling(); else stopPolling();
+    if (pending && location.protocol !== 'file:') startPolling(route); else stopPolling();
     if (o.focus) { var f = document.getElementById(o.focus); if (f) { try { f.focus(); var n = f.value.length; f.setSelectionRange(n, n); } catch (e) { /* ignore */ } } }
     else { try { window.scrollTo(0, 0); } catch (e) { /* non-browser environments */ } }
   }

@@ -121,6 +121,18 @@ jobs:
 
 Full example: [`examples/build-monitor.yml`](examples/build-monitor.yml).
 
+> **On a fork, enable the workflow once.** GitHub disables *scheduled*
+> workflows in forked repositories, and a workflow in that state runs on **no**
+> trigger at all — `workflow_run` and `workflow_dispatch` included, so the
+> monitoring page silently never updates. Actions → **Build monitor** →
+> *Enable workflow*, or:
+>
+> ```bash
+> gh workflow enable build-monitor.yml -R <owner>/<repo>
+> # state: "active" = runs; "disabled_fork" / "disabled_manually" = nothing runs
+> gh api repos/<owner>/<repo>/actions/workflows/build-monitor.yml --jq .state
+> ```
+
 ### 4. GitHub Pages setup (once)
 
 1. Run the **Build monitor** workflow once by hand (Actions → Build monitor →
@@ -128,6 +140,17 @@ Full example: [`examples/build-monitor.yml`](examples/build-monitor.yml).
    Pages can point at it.
 2. **Settings → Pages → Build and deployment → Source: “Deploy from a
    branch”**, branch `gh-pages`, folder `/(root)`.
+3. If the repository has a **`github-pages` environment with a deployment
+   branch policy** (repositories that deploy from a workflow often restrict it
+   to `main`), allow `gh-pages` there too — otherwise the automatic
+   `pages-build-deployment` run for `gh-pages` is rejected (“Branch is not
+   allowed to deploy to github-pages due to environment protection rules”) and
+   the site never updates, however many builds the action requests:
+   ```bash
+   # what the environment allows today (404 = no policy, nothing to do)
+   gh api repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies --jq '.branch_policies[].name'
+   gh api -X POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies -f name=gh-pages -f type=branch
+   ```
 
 The page lives at `https://<owner>.github.io/<repo>/`. The `pages: write`
 permission matters: per the
@@ -283,13 +306,31 @@ branch** — treat it accordingly:
   no matter what the workflow requests: the `report` step detects the 403,
   warns, sets `published: false` with a `reason`, and exits successfully.
   The processor additionally ignores fork runs unless `include-fork-runs`.
-- **Report HTML is user-controlled content on your Pages origin.** The viewer
-  embeds it only inside `<iframe sandbox="allow-scripts allow-popups
-  allow-popups-to-escape-sandbox allow-downloads" referrerpolicy="no-referrer">`;
-  only files that actually contain an mvn-lens model are published; every
-  path recorded in `history.json` is validated against a strict pattern
-  before it becomes a URL, and everything else on the page is rendered with
-  `textContent`, never `innerHTML`.
+- **Never add the `report` step to a job that hands `GITHUB_TOKEN` to the build
+  itself.** A step like `run: mvn … sonar:sonar` with
+  `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` (Sonar, release plugins,
+  changelog generators) exposes the job's token to every plugin and test of
+  that invocation — and the `report` step needs `contents: write` on the job,
+  so that token would be able to push to any unprotected branch. Leave such
+  jobs' permissions alone and monitor the others.
+- **A published report runs with the authority of the Pages origin.** The
+  report is the build's own HTML and is published as-is: the action checks
+  only that the file embeds a parseable mvn-lens model, which says nothing
+  about the rest of the document. It is then served from
+  `https://<owner>.github.io/<repo>/reports/…` — and on `github.io` that origin
+  is **shared with every other project site of the same owner** (a custom
+  domain, or a repository whose Pages site is organisation-only, narrows that).
+  The viewer's `<iframe sandbox="allow-scripts allow-popups
+  allow-popups-to-escape-sandbox allow-downloads" referrerpolicy="no-referrer">`
+  (no `allow-same-origin` ⇒ an opaque origin inside the frame) keeps a report
+  out of the monitoring page's own frame; it does **not** protect the origin —
+  the very same file is one click away un-framed, through *Open raw ↗*. What
+  bounds this is **who can publish**: a report only gets in through a job whose
+  token can write to the repository, i.e. someone who can already push to it
+  (fork pull requests cannot). Around the reports, the page itself validates
+  every path recorded in `history.json` against a strict pattern before it
+  becomes a URL, and renders everything else with `textContent`, never
+  `innerHTML`.
 - The token is passed through the API client only (never a command line, no
   `git` checkout of the site) and is masked in the log at startup.
 
@@ -302,11 +343,12 @@ Measured on real reports:
   encoding the report's own renderer already inflates (pako is inlined) — so
   it is **lossless**: 22.8 MB → **2.9 MB**, 2.8 MB → 1.6 MB. Only
   `report.html` is published, never `model.json` or JFR files.
-- A 13-job [assertj](https://github.com/mvn-perf/assertj) run adds **~35 MB**
-  of compressed reports. GitHub Pages serves sites up to **1 GB**, so that is
-  roughly **30 runs with full report HTML** before a cleanup is due (the
-  timings in `history.json` are tiny in comparison and keep the trends going
-  regardless).
+- One [assertj](https://github.com/mvn-perf/assertj) CI run adds **~35 MB** of
+  compressed reports — measured on run `33402133042`: 13 reports totalling
+  **34.7 MB**, published as 13 commits on one inbox ref. GitHub Pages serves
+  sites up to **1 GB**, so that is roughly **28 such runs with full report
+  HTML** before a cleanup is due (the timings in `history.json` are tiny in
+  comparison and keep the trends going regardless).
 - **Retention is a documented follow-up, not built yet** — but it has a
   corner reserved: the processor is the **only** writer of the site branch,
   so a future `keep-reports` can rewrite `gh-pages` as a single orphan commit
@@ -318,8 +360,12 @@ Measured on real reports:
   commit, ref), the processor a handful per run (run + jobs + meta blobs +
   one commit). The job summary of the processor lists the requests actually
   used.
-- Inbox refs are deleted after grafting; their objects become unreachable and
-  are garbage-collected by GitHub eventually. The branch list stays clean.
+- Deleting an inbox ref frees no reports, by design: the report blobs and trees
+  were grafted into `gh-pages` **by sha**, so they stay reachable from the site
+  branch — that is why publishing costs no second upload. Only the inbox
+  *commits* become unreachable once the ref is gone (GitHub garbage-collects
+  them eventually), and the branch list stays clean. Reclaiming report bytes is
+  the retention follow-up above, not a side effect of the deletion.
 - Pages soft limit of 10 builds/hour: the processor performs **one** build
   request per invocation, and the inbox refs are never a Pages source.
 

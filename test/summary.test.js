@@ -271,6 +271,35 @@ test('a report of an earlier attempt stays unattributed, with its attempt and a 
   assert.equal(r.outputs['reports-count'], '2');
 });
 
+test('an attempt-1 report without a job id is never joined by job name to the re-run job', async () => {
+  const fake = scenario(null, null, { attempt: 2 });
+  seedInbox(fake, {
+    'j7701-s6': Object.assign({}, JAVA_META, { runAttempt: 2 }),
+    // Same job name, published by attempt 1, with no usable job id (locate.js could not resolve it).
+    'java-a1b2c3': Object.assign({}, JAVA_META, { jobId: null, runAttempt: 1 }),
+  });
+  const r = await runSummary(fake, { GITHUB_RUN_ATTEMPT: '2' });
+  assert.equal(r.result.exitCode, 0, r.summary);
+  const rows = tableRows(r.summary);
+  // The re-run job keeps its own report only: no second link, and no step deep link into steps that never produced it.
+  assert.equal(rows[0], `| Java 25 (ubuntu-latest) | ✅ success | 4m 47s | 8.0 s · OK | [report](${viewer('j7701-s6')}) · ${stepLink(JAVA, 6)} |`);
+  assert.equal(rows.length, 4);
+  assert.equal(rows[3], `| unattributed (java-a1b2c3) · Java 25 (ubuntu-latest) · attempt 1 | — | — | 8.0 s · OK | [report](${viewer('java-a1b2c3')}) · [GitHub run ↗](${RUN_URL}) |`);
+  assert.equal(r.outputs['reports-count'], '2');
+});
+
+test('attributeKeys: an entry of another attempt is unattributed even when its name is unique', () => {
+  const jobs = [{ id: JAVA, name: 'Java 25 (ubuntu-latest)', steps: [{ number: 6, name: 'Build with Maven' }] }];
+  const meta = summary.normalizeMeta({ jobName: 'Java 25 (ubuntu-latest)', stepNumber: 6, runAttempt: 1, reports: [] });
+  const key = { key: 'java-a1b2c3', meta, reports: [{ name: 'report.html' }] };
+  assert.equal(summary.attributeKeys([key], jobs, 2)[0].job, null, 'attempt 1 report, attempt 2 jobs');
+  assert.equal(summary.attributeKeys([key], jobs, 2)[0].how, 'stale-attempt');
+  const same = summary.attributeKeys([key], jobs, 1)[0];
+  assert.equal(same.how, 'meta.jobName', 'the same attempt still joins by name');
+  assert.equal(same.job.id, JAVA);
+  assert.equal(summary.attributeKeys([key], jobs)[0].how, 'meta.jobName', 'no attempt known: unchanged behaviour');
+});
+
 test('a read-only token is enough: the summary only reads', async () => {
   const fake = scenario({ readOnly: true });
   seedInbox(fake, { 'j7701-s6': JAVA_META, 'j7702-s4': JAVADOC_META });

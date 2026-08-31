@@ -76,10 +76,10 @@ function workspace(model, htmlOpts) {
   return { dir, file };
 }
 
-function writeReport(file, model, htmlOpts) {
+function writeReport(file, model, htmlOpts, writtenAt) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, fakeReportHtml(model || fixtureModel(), Object.assign({ pako: true }, htmlOpts || {})));
-  const t = REPORT_WRITTEN_AT / 1000;
+  const t = (writtenAt || REPORT_WRITTEN_AT) / 1000;
   fs.utimesSync(file, t, t);
   return file;
 }
@@ -423,6 +423,39 @@ test('attribution: explicit job-name (+ step-name), runner name, and an unresolv
   assert.match(lost.stdout, /::warning::.*could not identify this job/);
   assert.match(lost.summary, /^#### mvn-lens report — Java \(25\) › Build with Maven\n/);
   assert.equal(fake.store.commit(lost.out['commit-sha']).message, 'Add mvn-lens report: Java (25) › Build with Maven');
+});
+
+test('attribution: a report written in the last second of the Maven step goes to Maven, not to the step starting there', async () => {
+  // assertj run 33402133042, job "Kotlin 2.1.21": "Test" 14:32:57 → 14:34:37 (Maven), then "Publish the
+  // mvn-lens build report" 14:34:37 → 14:34:44. mvn-lens writes report.html as the Maven session ends
+  // (mtime 14:34:36.8) and the Jobs API truncates timestamps to whole seconds, so the *next* step's
+  // started_at is already before the mtime.
+  const base = Math.floor((Date.now() - 200000) / 1000) * 1000;   // second-aligned, as the API serves them
+  const fake = createFakeGitHub({ repository: REPO, runs: [fakeRun({
+    id: RUN_ID, baseMs: base, status: 'in_progress', repository: REPO, jobs: [
+      { id: JOB_ID, name: 'build', runnerName: 'GitHub Actions 7', steps: [
+        { number: 1, name: 'Set up job', start: 2, end: 4 },
+        { number: 2, name: 'Run actions/checkout@v5', start: 4, end: 6 },
+        { number: 3, name: 'Build', start: 6, end: 20 },
+        { number: 4, name: 'Test', start: 20, end: 120 },
+        { number: 5, name: 'Publish the mvn-lens build report', start: 120, end: 127, status: 'in_progress' },
+      ] },
+    ],
+  })] });
+  const dir = tmpDir('report');
+  writeReport(path.join(dir, 'target', 'mvnlens', 'report.html'), null, null, base + 119800);
+
+  const { res, out, stdout } = await runReport(fake, dir);
+  assert.equal(res.exitCode, 0, stdout);
+  assert.equal(out.published, 'true');
+  assert.equal(out.key, `j${JOB_ID}-s4`, 'the Maven step number, not the publish step');
+  assert.equal(out['step-name'], 'Test');
+  assert.equal(out['report-path'], `reports/${RUN_ID}/j${JOB_ID}-s4/report.html`);
+  const meta = inboxMeta(fake, `j${JOB_ID}-s4`);
+  assert.equal(meta.stepNumber, 4);
+  assert.equal(meta.stepName, 'Test');
+  assert.equal(meta.stepResolution, 'runner/report-time');
+  assert.match(out['report-url'], new RegExp(`#/report/${RUN_ID}/j${JOB_ID}-s4$`));
 });
 
 test('label: appended to the key (sanitised) and recorded verbatim in meta.json', async () => {
