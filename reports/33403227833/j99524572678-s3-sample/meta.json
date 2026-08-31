@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "repository": "mvn-perf/build-monitor",
+  "serverUrl": "https://github.com",
+  "runId": 33403227833,
+  "runNumber": 3,
+  "runAttempt": 1,
+  "workflowRef": "mvn-perf/build-monitor/.github/workflows/ci.yml@refs/heads/main",
+  "jobKey": "self-test",
+  "jobId": 99524572678,
+  "jobName": "Self-test on this repository",
+  "jobUrl": "https://github.com/mvn-perf/build-monitor/actions/runs/33403227833/job/99524572678",
+  "runnerName": "GitHub Actions 1000001373",
+  "stepNumber": 3,
+  "stepName": "Publish a sample mvn-lens report to this run's inbox",
+  "stepResolution": "runner/report-time",
+  "label": "sample",
+  "key": "j99524572678-s3-sample",
+  "collectedAt": "2026-08-31T14:33:07.214Z",
+  "reports": [
+    {
+      "file": "report.html",
+      "originalPath": "test/fixtures/sample-report/report.html",
+      "label": null,
+      "summary": {
+        "schemaVersion": 1,
+        "groupId": "org.mvnlens.it",
+        "artifactId": "it04-multi-module",
+        "version": "1.0-SNAPSHOT",
+        "goals": [
+          "clean",
+          "verify"
+        ],
+        "threads": 1,
+        "builderId": "singlethreaded",
+        "mavenVersion": "3.9.16",
+        "jdkVersion": "17.0.8.1",
+        "status": "OK",
+        "startedAt": 1787846070961,
+        "endedAt": 1787846078534,
+        "totalMs": 7975,
+        "wallMs": 7573,
+        "cpuMs": 903,
+        "gcMs": 0,
+        "gcCount": 17,
+        "jitMs": 9919,
+        "c2Ms": 9919,
+        "downloadMs": 0,
+        "downloadBytes": 0,
+        "downloadCount": 0,
+        "moduleCount": 5,
+        "slowestMojo": {
+          "plugin": "org.apache.maven.plugins:maven-surefire-plugin",
+          "goal": "test",
+          "phase": "test",
+          "executionId": "default-test",
+          "moduleKey": "org.mvnlens.it:lib-a:1.0-SNAPSHOT",
+          "durationMs": 1651
+        },
+        "slowestTest": {
+          "className": "liba.LibATest",
+          "methodName": "name",
+          "displayName": "name()",
+          "framework": "JUNIT5",
+          "durationMs": 133
+        },
+        "testCount": 4,
+        "testMs": 513,
+        "issueCount": 0,
+        "issueSeverities": {},
+        "environment": {
+          "availableProcessors": 16,
+          "cpuCores": 16,
+          "cpuThreads": 16,
+          "memoryBytes": 14802644992,
+          "osName": "Windows 11 , 64 bit Build 26100 (10.0.26100.9168)",
+          "jvmName": "OpenJDK 64-Bit Server VM",
+          "jvmVendor": "Eclipse Adoptium",
+          "mvnd": false,
+          "githubActions": false,
+          "c2DisabledBy": null
+        }
+      },
+      "summarySource": "html",
+      "compressed": false,
+      "bytes": 17263
+    }
+  ]
+}
