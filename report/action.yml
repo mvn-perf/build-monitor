@@ -25,7 +25,7 @@ inputs:
   job-name:
     description: >-
       Display name of the current job, for jobs with a custom `name:` (matrix
-      expressions expand fine, e.g. "Java ${{ matrix.java }}"). Without it the job
+      expressions expand fine, e.g. "Java <matrix.java>"). Without it the job
       is found through the runner name, then the job key.
     required: false
     default: ''
