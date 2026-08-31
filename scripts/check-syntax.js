@@ -111,6 +111,17 @@ for (const manifest of MANIFESTS) {
     }
   }
   if (!/^branding:\s*$/m.test(y)) problems.push('no "branding:" block');
+  // The runner evaluates "${{ }}" everywhere in a manifest, descriptions included:
+  // an expression there fails the action at load time ("Unrecognized named-value").
+  // Only the github/inputs contexts are meaningful in a manifest (input defaults).
+  y.split(/\r?\n/).forEach((line, i) => {
+    const m = /\$\{\{\s*([\w-]+)/.exec(line);
+    if (m && !['github', 'inputs'].includes(m[1])) problems.push(`line ${i + 1}: expression "${m[0]}}}" would be evaluated by the runner`);
+    if (m && !/^\s+default:/.test(line)) problems.push(`line ${i + 1}: expression outside an input default`);
+    // A plain (unquoted, non-block) scalar with ": " inside is invalid YAML for strict parsers.
+    const d = /^(\s+description:\s+)([^'">|][^\n]*)$/.exec(line);
+    if (d && /:\s/.test(d[2])) problems.push(`line ${i + 1}: unquoted description contains ": " (invalid YAML) — quote it`);
+  });
   if (problems.length) err(`${manifest}: ${problems.join('; ')}`);
   else ok(manifest);
 }
