@@ -59,6 +59,8 @@ function actionEnv(cap, extra) {
     GITHUB_REPOSITORY: REPO, GITHUB_RUN_ID: String(RUN_ID), GITHUB_RUN_NUMBER: '42', GITHUB_RUN_ATTEMPT: '1',
     GITHUB_JOB: 'build', RUNNER_NAME: 'GitHub Actions 7', GITHUB_SERVER_URL: 'https://github.com', GITHUB_API_URL: 'https://api.github.com',
     GITHUB_WORKFLOW_REF: 'acme/widgets/.github/workflows/ci.yml@refs/heads/main', GITHUB_WORKFLOW: 'CI', GITHUB_EVENT_PATH: null, GITHUB_TOKEN: null,
+    // On a real runner GITHUB_ACTIONS=true makes addMask print "::add-mask::<token>" (by design); the leak checks below must not see it.
+    GITHUB_ACTIONS: null, RUNNER_DEBUG: null, BUILD_MONITOR_DEBUG: null,
     'INPUT_GITHUB-TOKEN': TOKEN, INPUT_GITHUB_TOKEN: null, INPUT_REPORT: null, 'INPUT_STEP-NAME': null, INPUT_STEP_NAME: null,
     'INPUT_JOB-NAME': null, INPUT_JOB_NAME: null, INPUT_LABEL: null, 'INPUT_INBOX-PREFIX': null, INPUT_INBOX_PREFIX: null,
     'INPUT_SITE-URL': null, INPUT_SITE_URL: null, INPUT_COMPRESS: null, 'INPUT_IF-NO-FILES-FOUND': null, INPUT_IF_NO_FILES_FOUND: null,
@@ -482,7 +484,14 @@ test('compress: false publishes the original bytes; a report without pako is pub
 
 test('the repository sample report with label "sample" (what the CI self-test publishes)', async () => {
   const fake = scenario();
-  const { res, out } = await runReport(fake, ROOT, { INPUT_REPORT: 'test/fixtures/sample-report/report.html', INPUT_LABEL: 'sample' });
+  // A copy of the fixture under the same relative path, with a controlled mtime: the
+  // checked-out file's mtime is "now" on CI, which would attribute it to the running step.
+  const dir = tmpDir('sample');
+  const rel = path.join('test', 'fixtures', 'sample-report', 'report.html');
+  fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, rel), path.join(dir, rel));
+  fs.utimesSync(path.join(dir, rel), REPORT_WRITTEN_AT / 1000, REPORT_WRITTEN_AT / 1000);
+  const { res, out } = await runReport(fake, dir, { INPUT_REPORT: 'test/fixtures/sample-report/report.html', INPUT_LABEL: 'sample' });
   assert.equal(res.exitCode, 0);
   assert.equal(out.found, 'true');
   assert.equal(out.published, 'true');
