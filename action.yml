@@ -1,0 +1,140 @@
+name: 'Build monitor'
+description: >-
+  Publishes an HTML monitoring page of your GitHub Actions builds — runs, jobs,
+  steps and durations over time, and every mvn-lens Maven build report one
+  click away from the GitHub step that produced it. Runs after a monitored
+  workflow completes: grafts the reports its jobs pushed to the inbox ref into
+  the site branch, updates data/history.json and index.html in one commit,
+  requests a GitHub Pages build and deletes the inbox ref. No artifacts.
+author: mvn-perf
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  github-token:
+    description: >-
+      Token with "actions: read" (runs and jobs), "contents: write" (the site
+      branch and the build-monitor-inbox/* refs, through the Git Data API) and
+      "pages: write" (the explicit Pages build request after publishing).
+    required: false
+    default: ${{ github.token }}
+  repository:
+    description: Repository to monitor ("owner/name"). Defaults to the current one.
+    required: false
+    default: ${{ github.repository }}
+
+  # ---- where the site lives ----------------------------------------------------
+  branch:
+    description: Branch that serves the site (GitHub Pages "Deploy from a branch"). Created on the first run.
+    required: false
+    default: gh-pages
+  site-dir:
+    description: Sub-directory of the branch holding the site (empty = branch root; other branch content is preserved).
+    required: false
+    default: ''
+  site-url:
+    description: >-
+      Public URL of the monitoring page, used for the links in the job summary.
+      Default: the URL GitHub Pages reports (needs "pages: read"), else
+      https://<owner>.github.io/<repo>/, plus `site-dir`.
+    required: false
+    default: ''
+  title:
+    description: Page title (default "Build monitor · <owner>/<repo>").
+    required: false
+    default: ''
+  inbox-prefix:
+    description: >-
+      Branch namespace of the per-run inbox refs the `report` steps push to
+      (refs/heads/<prefix><run id>). Must match the `report` and `summary` steps.
+    required: false
+    default: build-monitor-inbox/
+
+  # ---- what to monitor -----------------------------------------------------------
+  workflows:
+    description: >-
+      Workflows to monitor: names, file names (ci.yml), paths or ids, newline-
+      or comma-separated. Default: the workflow of the triggering `workflow_run`
+      event when there is one, else every workflow except this one.
+    required: false
+    default: ''
+  exclude-workflows:
+    description: Workflows to leave out (same syntax as `workflows`).
+    required: false
+    default: ''
+  include-self:
+    description: Also monitor the workflow this action runs in (excluded by default).
+    required: false
+    default: 'false'
+  run-id:
+    description: >-
+      Run id(s) to (re)process, newline- or comma-separated (the workflow and
+      fork filters still apply). The triggering `workflow_run`'s id, the runs
+      with an inbox ref and the incomplete runs of the history are always
+      processed as well.
+    required: false
+    default: ''
+  sweep-runs:
+    description: >-
+      On every invocation, the N most recent runs of each monitored workflow
+      (created within `lookback-days`) are checked and (re)processed when they
+      are missing from the history or changed since — lost `workflow_run`
+      events and cancelled processor runs are caught up this way. 0 disables.
+    required: false
+    default: '20'
+  lookback-days:
+    description: How far back the sweep looks for runs (the history keeps older ones).
+    required: false
+    default: '90'
+  include-fork-runs:
+    description: >-
+      Also record runs whose head repository is a fork (pull requests from
+      forks). Off by default; such runs publish no reports either way (their
+      token is read-only). Their inbox refs, if any, are left alone.
+    required: false
+    default: 'false'
+  concurrency:
+    description: Runs processed in parallel (API requests in flight), 1–16.
+    required: false
+    default: '4'
+
+  # ---- publishing --------------------------------------------------------------
+  request-pages-build:
+    description: >-
+      Request a GitHub Pages build (POST /repos/{repo}/pages/builds) after a
+      commit — pushes made with GITHUB_TOKEN do not trigger one by themselves.
+      Needs "pages: write"; without it a warning is printed.
+    required: false
+    default: 'true'
+  dry-run:
+    description: >-
+      Build everything but publish nothing: the site (index.html,
+      data/history.json, .nojekyll) is written to `output-dir`, no ref is
+      written or deleted, no Pages build is requested.
+    required: false
+    default: 'false'
+  output-dir:
+    description: Where the dry-run site is written.
+    required: false
+    default: build-monitor-site
+
+outputs:
+  site-url:
+    description: Public URL of the monitoring page, when it could be determined.
+  runs-processed:
+    description: Number of runs fetched and recorded by this invocation.
+  runs-total:
+    description: Number of runs in the history after this invocation.
+  reports-collected:
+    description: Number of mvn-lens report files grafted from inbox refs into the site by this invocation.
+  reports-bytes:
+    description: Total size in bytes of the mvn-lens report files on the site after this invocation.
+  published:
+    description: '"true" when a commit was pushed to the site branch (false when nothing changed, on dry runs and on failure).'
+  commit-sha:
+    description: SHA of the site branch head after this invocation (the new commit when published; empty on dry runs and on failure).
+
+runs:
+  using: node24
+  main: src/index.js

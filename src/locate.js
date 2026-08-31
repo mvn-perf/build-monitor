@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const { warning, sleep, fmtMs } = require('./util');
+const { warning, sleep } = require('./util');
 const { GitHubApi } = require('./github-api');
 
 /**
@@ -27,7 +27,8 @@ const { GitHubApi } = require('./github-api');
  * @param {object} ctx { repository, runId, runAttempt, jobKey, jobName, runnerName, reportWrittenAt }
  * @param {string} token
  * @param {string} [stepName]
- * @param {object} [opts] { api } — an existing GitHubApi (tests)
+ * @param {object} [opts] { api, sleep, maxRounds } — an existing GitHubApi, an injectable delay
+ *   (default util.sleep) and the number of job snapshots to try (default 3) — tests
  * @returns {Promise<{job: {id, name, htmlUrl}|null, step: {number, name}|null, how: string}>}
  */
 async function locateJobAndStep(ctx, token, stepName, opts) {
@@ -35,6 +36,8 @@ async function locateJobAndStep(ctx, token, stepName, opts) {
   if (!ctx.repository || !ctx.runId) return none;
   if (!token) { warning('build-monitor: no github-token; the report is attributed to the job by name only'); return none; }
   const api = (opts && opts.api) || new GitHubApi({ token, maxAttempts: 2 });
+  const wait = opts && typeof opts.sleep === 'function' ? opts.sleep : sleep;
+  const maxRounds = Math.max(1, Math.floor(Number(opts && opts.maxRounds) || 3));
   const fetchJobs = () => api.paginate(`/repos/${ctx.repository}/actions/runs/${ctx.runId}/attempts/${ctx.runAttempt || 1}/jobs`, {}, 'jobs', { timeoutMs: 20000 });
 
   let jobs;
@@ -47,8 +50,8 @@ async function locateJobAndStep(ctx, token, stepName, opts) {
 
   let job = null;
   let how = '';
-  for (let round = 0; round < 3 && !job; round++) {
-    if (round) { await sleep(2000 * round); try { jobs = await fetchJobs(); } catch (e) { break; } }
+  for (let round = 0; round < maxRounds && !job; round++) {
+    if (round) { await wait(2000 * round); try { jobs = await fetchJobs(); } catch (e) { break; } }
     const running = jobs.filter(j => j.status === 'in_progress');
     if (ctx.jobName) {
       const cands = running.filter(j => j.name === ctx.jobName);
@@ -84,9 +87,9 @@ async function locateJobAndStep(ctx, token, stepName, opts) {
     if (!step) warning(`build-monitor: no step named "${stepName}" in job "${job.name}"; falling back to the step that produced the report`);
     else how += '/step-name';
   }
-  for (let round = 0; round < 3 && !step; round++) {
+  for (let round = 0; round < maxRounds && !step; round++) {
     if (round) {
-      await sleep(2000 * round);
+      await wait(2000 * round);
       try { jobs = await fetchJobs(); } catch (e) { break; }
       const fresh = jobs.find(j => j.id === job.id);
       if (fresh) steps = (fresh.steps || []).slice().sort((a, b) => a.number - b.number);
@@ -99,13 +102,13 @@ async function locateJobAndStep(ctx, token, stepName, opts) {
       if (containing.length) { step = containing[containing.length - 1]; how += '/report-time'; break; }
       const before = completed.filter(s => s.completed_at && Date.parse(s.completed_at) <= at + 1000);
       const snapshotStale = !steps.some(s => s.status === 'in_progress') && before.length && Date.parse(before[before.length - 1].completed_at) < at - 1000;
-      if (snapshotStale && round < 2) continue;   // the API is behind: retry
+      if (snapshotStale && round < maxRounds - 1) continue;   // the API is behind: retry
       if (before.length) { step = before[before.length - 1]; how += '/previous-step'; break; }
     }
     const current = steps.find(s => s.status === 'in_progress');
     const before = completed.filter(s => !current || s.number < current.number);
     if (before.length) { step = before[before.length - 1]; how += '/previous-step'; break; }
-    if (round === 2) how += '/no-step';
+    if (round === maxRounds - 1) how += '/no-step';
   }
   return {
     job: { id: job.id, name: job.name, htmlUrl: job.html_url || null },
@@ -114,4 +117,4 @@ async function locateJobAndStep(ctx, token, stepName, opts) {
   };
 }
 
-module.exports = { locateJobAndStep, fmtMs };
+module.exports = { locateJobAndStep };

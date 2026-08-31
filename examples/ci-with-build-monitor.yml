@@ -1,0 +1,109 @@
+# A Maven CI workflow monitored by build-monitor: every Maven job publishes the
+# mvn-lens report of its build step straight into git (no artifact), and a final
+# job writes the monitoring link and a per-job table into the run's summary.
+# The "Build monitor" workflow (examples/build-monitor.yml) picks the reports up
+# once the run completes and updates the monitoring page on gh-pages.
+#
+# mvn-lens itself is enabled by the project's .mvn/extensions.xml
+# (https://github.com/mvn-perf/mvn-lens#quick-start):
+#
+#   <extensions xmlns="http://maven.apache.org/EXTENSIONS/1.2.0">
+#     <extension>
+#       <groupId>io.github.mvn-perf</groupId>
+#       <artifactId>mvn-lens-extension</artifactId>
+#       <version>0.1.0</version>
+#     </extension>
+#   </extensions>
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Workflow-level: read-only. The jobs that publish a report raise `contents` to
+# write themselves (see the trust model in the README), everything else stays read.
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  java:
+    name: Java ${{ matrix.java }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        java: ['17', '21']
+    permissions:
+      contents: write   # the report step commits report.html to refs/heads/build-monitor-inbox/<run id>
+      actions: read     # the report step identifies its own job and step through the API
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false   # do not leave a write-capable token in .git/config for the build to find
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn -B -ntp verify
+
+      # Right after the Maven step, even when it failed (a failed build's report is
+      # the one you want) — but not when the run was cancelled. The step the report
+      # belongs to is detected automatically (the one that was running when the
+      # report was written); pass `step-name:` to override. Jobs with a custom
+      # `name:` pass it as `job-name:` so the step identifies itself unambiguously.
+      - name: Publish mvn-lens report
+        if: ${{ !cancelled() }}
+        uses: mvn-perf/build-monitor/report@main
+        with:
+          report: target/mvnlens/report.html
+          job-name: Java ${{ matrix.java }} (${{ matrix.os }})
+          # step-name: Build with Maven
+          # label: ${{ matrix.os }}          # only needed to split several Maven runs of ONE step
+
+  javadoc:
+    name: Javadoc
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Generate Javadoc
+        run: mvn -B -ntp javadoc:javadoc
+      - name: Publish mvn-lens report
+        if: ${{ !cancelled() }}
+        uses: mvn-perf/build-monitor/report@main
+        with:
+          job-name: Javadoc
+
+  # Last job: waits for every monitored job, then writes the monitoring link and
+  # the per-job table (result, duration, Maven total, report links) into the run
+  # summary. Read-only: it only reads this run's inbox ref.
+  monitoring:
+    name: Monitoring
+    runs-on: ubuntu-latest
+    needs: [java, javadoc]
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: mvn-perf/build-monitor/summary@main
+        # with:
+        #   title: Build monitoring       # heading of the summary section
+        #   site-url: https://example.org/ci/   # when the Pages URL cannot be derived (custom domain)

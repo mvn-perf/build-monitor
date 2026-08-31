@@ -20,8 +20,7 @@ class HttpError extends Error {
 
 /**
  * Tiny GitHub REST client on top of the global fetch (Node 18+): auth, JSON,
- * Link-header pagination, rate-limit waits, transient-error retries and the
- * two-hop artifact download (API -> 302 -> blob storage, no auth on hop two).
+ * Link-header pagination, rate-limit waits and transient-error retries.
  */
 class GitHubApi {
   constructor(opts) {
@@ -158,22 +157,6 @@ class GitHubApi {
       if (o.maxPages && pages >= o.maxPages) break;
     }
     return o.max ? all.slice(0, o.max) : all;
-  }
-
-  /**
-   * Downloads an artifact zip. The API answers 302 to a short-lived blob URL that
-   * must be fetched WITHOUT the Authorization header (the blob host rejects it).
-   */
-  async downloadArtifact(repo, artifactId, opts) {
-    const path = `/repos/${repo}/actions/artifacts/${artifactId}/zip`;
-    const first = await this.raw(path, { redirect: 'manual', raw: true, timeoutMs: (opts && opts.timeoutMs) || 120000 });
-    if (first.status >= 300 && first.status < 400) {
-      const location = first.headers.get('location');
-      if (!location) throw new Error('artifact redirect without Location header');
-      const second = await this.raw(location, { noAuth: true, raw: true, timeoutMs: (opts && opts.timeoutMs) || 300000 });
-      return second.buffer;
-    }
-    return first.buffer;
   }
 }
 

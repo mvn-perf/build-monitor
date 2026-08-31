@@ -1,0 +1,103 @@
+name: 'Publish mvn-lens report (build-monitor)'
+description: >-
+  Publishes the mvn-lens report of the preceding Maven step to this run's
+  build-monitor inbox (a git ref, no artifact), attributed to the exact job and
+  step, so the Build monitor page can show it and link the GitHub step.
+author: mvn-perf
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  report:
+    description: >-
+      Path(s) or glob(s) of the mvn-lens report(s) to publish (newline- or
+      comma-separated). The first match is the primary report of the step; extra
+      matches are published next to it as report-2.html, report-3.html…
+    required: false
+    default: target/mvnlens/report.html
+  step-name:
+    description: >-
+      Name of the step that ran Maven. Defaults to the step that was running when
+      the report file was written (normally the step right before this one).
+    required: false
+    default: ''
+  job-name:
+    description: >-
+      Display name of the current job, for jobs with a custom `name:` (matrix
+      expressions expand fine, e.g. "Java ${{ matrix.java }}"). Without it the job
+      is found through the runner name, then the job key.
+    required: false
+    default: ''
+  label:
+    description: >-
+      Distinguishes several Maven builds of the same job/step (a scenario, a
+      matrix leg). Becomes part of the key and of the series identity on the page.
+    required: false
+    default: ''
+  github-token:
+    description: >-
+      Token with "contents: write" (commit to refs/heads/<inbox-prefix><run id>)
+      and "actions: read" (identify this job and step). Pull requests from forks
+      get a read-only token: the step then warns and publishes nothing.
+    required: false
+    default: ${{ github.token }}
+  inbox-prefix:
+    description: Branch namespace of the per-run inbox refs; must match the summary and build-monitor actions.
+    required: false
+    default: build-monitor-inbox/
+  site-url:
+    description: >-
+      URL of the monitoring page, for the links this step prints. Defaults to the
+      repository's GitHub Pages URL (https://<owner>.github.io/<repo>/).
+    required: false
+    default: ''
+  compress:
+    description: >-
+      Losslessly re-encode the report's embedded model as gzip+base64 (the
+      renderer inflates it; 22.8 MB → 2.9 MB). Skipped when the report cannot
+      inflate it.
+    required: false
+    default: 'true'
+  if-no-files-found:
+    description: 'What to do when no report exists: warn (default), error or ignore.'
+    required: false
+    default: warn
+  fail-on-error:
+    description: >-
+      Fail the step when publishing fails (default: warn, set the outputs and exit
+      successfully — publishing monitoring data should not break a build).
+    required: false
+    default: 'false'
+  commit-message:
+    description: Prefix of the inbox commit message ("<prefix>: <job> › <step>").
+    required: false
+    default: Add mvn-lens report
+
+outputs:
+  found:
+    description: '"true" when at least one mvn-lens report was found.'
+  published:
+    description: '"true" when the report was committed to the inbox ref (or was already there).'
+  key:
+    description: Report key inside the run ("j<jobId>-s<step>[-<label>]", or "<job key>-<random>[-<label>]" when the job could not be identified).
+  report-path:
+    description: Path of the primary report inside the inbox ref and the site ("reports/<run id>/<key>/report.html").
+  monitor-url:
+    description: URL of this run on the monitoring page (available once the Build monitor workflow has processed the run).
+  report-url:
+    description: URL of the report in the monitoring page's viewer.
+  job-id:
+    description: Id of the current job as resolved through the API (empty when unresolved).
+  step-name:
+    description: Name of the step the report was attributed to (empty when unresolved).
+  maven-total-ms:
+    description: Maven "Total time" of the primary report in milliseconds (empty when unknown).
+  commit-sha:
+    description: Sha of the inbox commit holding the report (empty when not published).
+  reason:
+    description: Why nothing was published (empty on success).
+
+runs:
+  using: node24
+  main: index.js

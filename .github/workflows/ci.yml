@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  test:
+    name: Tests · ${{ matrix.os }} · Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['20', '24']   # 20 is the supported floor, 24 is what `using: node24` runs on
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version
+      - name: Unit tests
+        run: npm test
+      - name: Syntax check (the sources run un-bundled on the runner's Node; nothing newer than Node 20)
+        run: npm run lint
+
+  # The three actions run against this very repository with a real GITHUB_TOKEN:
+  # `report` pushes a sample report to this run's inbox ref, `summary` reads it
+  # back into the job summary, and the processor builds the site without
+  # publishing it (the site is uploaded as an artifact for inspection — reports
+  # themselves never travel as artifacts). The inbox ref left behind is grafted
+  # into gh-pages by the "Build monitor" workflow once this run completes.
+  # Not on pull requests from forks: their token is read-only, so the report
+  # step would (correctly) skip and there would be nothing to check.
+  self-test:
+    name: Self-test on this repository
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write   # the report step commits to refs/heads/build-monitor-inbox/<run id>
+      actions: read     # the report step identifies its job/step; the processor lists runs and jobs
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false   # the token lives in the report step only, never in .git/config
+
+      - name: Publish a sample mvn-lens report to this run's inbox
+        id: report
+        uses: ./report
+        with:
+          report: test/fixtures/sample-report/report.html
+          label: sample
+
+      - name: Monitoring summary for this run
+        id: summary
+        uses: ./summary
+
+      - name: Build the monitoring site (dry run)
+        id: monitor
+        uses: ./
+        with:
+          dry-run: true
+          output-dir: build-monitor-site   # not site/ — that is this repo's front-end source
+          workflows: CI
+          include-self: true
+
+      - name: Check the outcome
+        run: |
+          echo "report : published=${{ steps.report.outputs.published }} key=${{ steps.report.outputs.key }} reason=${{ steps.report.outputs.reason }}"
+          echo "summary: ${{ steps.summary.outputs.reports-count }} report(s) — ${{ steps.summary.outputs.monitor-url }}"
+          echo "monitor: runs=${{ steps.monitor.outputs.runs-total }} processed=${{ steps.monitor.outputs.runs-processed }} reports=${{ steps.monitor.outputs.reports-collected }} (${{ steps.monitor.outputs.reports-bytes }} bytes)"
+          test "${{ steps.report.outputs.found }}" = "true"
+          test "${{ steps.report.outputs.published }}" = "true"
+          test -f build-monitor-site/index.html
+          test -f build-monitor-site/data/history.json
+          test -f build-monitor-site/.nojekyll
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-monitor-site
+          path: build-monitor-site
+          retention-days: 7

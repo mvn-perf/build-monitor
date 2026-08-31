@@ -1,0 +1,50 @@
+name: Build monitor summary
+description: >-
+  Final job of a monitored workflow run: writes the link to this run's page in the monitoring site and a
+  per-job table (result, duration, Maven total, mvn-lens report and GitHub step links) into the job summary.
+  Reads this run's jobs and the reports its jobs published to the run's inbox ref with the report action.
+  Read-only; never fails the workflow unless fail-on-error is set.
+author: mvn-perf
+
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  github-token:
+    description: >-
+      Token with "actions: read" (this run's jobs) and "contents: read" (this run's inbox ref).
+    required: false
+    default: ${{ github.token }}
+  inbox-prefix:
+    description: >-
+      Branch-name prefix of the inbox refs the report steps push to (refs/heads/<prefix><run id>);
+      must match the report steps.
+    required: false
+    default: build-monitor-inbox/
+  site-url:
+    description: >-
+      URL of the monitoring site. Default - the repository's GitHub Pages URL (from the Pages API when readable,
+      else https://<owner>.github.io/<repo>/). Set it for a custom domain or a site-dir.
+    required: false
+    default: ''
+  title:
+    description: Heading of the summary section.
+    required: false
+    default: Build monitoring
+  fail-on-error:
+    description: >-
+      Fail the step when the jobs or the inbox ref cannot be read. Default - warn and still write the
+      monitoring link.
+    required: false
+    default: 'false'
+
+outputs:
+  monitor-url:
+    description: This run's page in the monitoring site (<site-url>#/run/<run id>).
+  reports-count:
+    description: Number of mvn-lens report files found in this run's inbox.
+
+runs:
+  using: node24
+  main: index.js

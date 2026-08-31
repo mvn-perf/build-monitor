@@ -1,0 +1,61 @@
+# Updates the monitoring page on gh-pages after every CI run, nightly, and on
+# demand. Copy to .github/workflows/build-monitor.yml.
+#
+# One-time repository setup:
+#   1. Run this workflow once by hand (Actions → Build monitor → Run workflow):
+#      it creates the gh-pages branch.
+#   2. Settings → Pages → Build and deployment → Source: "Deploy from a branch",
+#      Branch: gh-pages / (root).
+# The page then lives at https://<owner>.github.io/<repo>/.
+name: Build monitor
+
+on:
+  workflow_run:
+    # The workflows whose runs are monitored — the page refreshes as soon as one
+    # of them completes (its reports are waiting in refs/heads/build-monitor-inbox/<run id>).
+    workflows: ['CI']
+    types: [completed]
+  schedule:
+    - cron: '17 3 * * *'   # daily sweep: runs whose completion event was lost, inbox refs left behind
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: Run id(s) to (re)process, comma-separated (empty = sweep the recent runs)
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  actions: read     # list runs and jobs
+  contents: write   # write gh-pages and delete the build-monitor-inbox/* refs (Git Data API, no checkout needed)
+  pages: write      # request a Pages build: pushes made with GITHUB_TOKEN do not trigger one by themselves
+
+# The processor is the only writer of gh-pages: never two at the same time. With
+# `queue: max` every triggering CI run waits its turn instead of replacing the
+# pending one (with the default queue a burst of runs would leave only the last
+# pending; the daily sweep would still catch the others up).
+concurrency:
+  group: build-monitor
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update the monitoring page
+        id: monitor
+        uses: mvn-perf/build-monitor@main
+        with:
+          workflows: CI                     # default: the workflow of the triggering run (all but this one on schedule/dispatch)
+          run-id: ${{ inputs.run-id }}
+          # sweep-runs: 20                  # recent runs per workflow checked for absence from the history, every time
+          # lookback-days: 90               # how far back the sweep looks
+          # branch: gh-pages
+          # site-dir: ''                    # sub-directory of the branch; empty = root
+          # title: CI monitoring
+
+      - name: Where is it?
+        run: |
+          echo "Monitoring page: ${{ steps.monitor.outputs.site-url }}"
+          echo "Runs: ${{ steps.monitor.outputs.runs-processed }} processed, ${{ steps.monitor.outputs.runs-total }} in the history; reports: ${{ steps.monitor.outputs.reports-collected }}"

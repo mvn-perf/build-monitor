@@ -1,0 +1,47 @@
+# Dogfood: the monitoring page of this repository's own CI, published to gh-pages.
+# Settings → Pages → Source "Deploy from a branch", branch gh-pages, folder /(root)
+# — after the first run of this workflow has created the branch.
+name: Build monitor
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+  schedule:
+    - cron: '23 4 * * *'   # daily sweep: runs whose trigger was lost, inbox refs left behind
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: Run id(s) to (re)process, comma-separated (empty = sweep the recent runs)
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  actions: read     # runs and jobs
+  contents: write   # gh-pages and the build-monitor-inbox/* refs (Git Data API)
+  pages: write      # POST /pages/builds — GITHUB_TOKEN pushes do not trigger a Pages build by themselves
+
+# The processor is the only writer of gh-pages: one at a time, and every
+# triggering run keeps its place in the queue instead of replacing the pending one.
+concurrency:
+  group: build-monitor
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Update the monitoring page
+        id: monitor
+        uses: ./
+        with:
+          workflows: CI
+          run-id: ${{ inputs.run-id }}
+      - run: |
+          echo "Site: ${{ steps.monitor.outputs.site-url }}"
+          echo "Runs processed: ${{ steps.monitor.outputs.runs-processed }} of ${{ steps.monitor.outputs.runs-total }}; reports grafted: ${{ steps.monitor.outputs.reports-collected }}; published: ${{ steps.monitor.outputs.published }} (${{ steps.monitor.outputs.commit-sha }})"

@@ -15,8 +15,9 @@ const SCHEMA_VERSION = 1;
  *
  * {
  *   schemaVersion: 1,
- *   repository: "owner/repo", repositoryUrl, defaultBranch, siteUrl,
+ *   repository: "owner/repo", repositoryUrl, serverUrl, defaultBranch, siteUrl,
  *   generatedAt: ISO,
+ *   stats: { reportsCount, reportsBytes },   // over every mvnLens entry (recomputed by the processor)
  *   workflows: { "<id>": { id, name, path, state } },
  *   runs: [ RunRecord … ]           // newest first
  * }
@@ -27,20 +28,25 @@ const SCHEMA_VERSION = 1;
  *   createdAt, startedAt, completedAt, updatedAt   (ISO strings)
  *   durationMs, queueMs,
  *   jobs: [ { id, name, status, conclusion, startedAt, completedAt, durationMs,
- *             runnerName, labels, htmlUrl,
+ *             runnerName, runnerGroup, labels, htmlUrl,
  *             steps: [ { number, name, status, conclusion, startedAt, completedAt, durationMs } ] } ],
  *   mvnLens: [ MvnLensEntry … ]
  * }
  *
  * MvnLensEntry {
- *   key ("j<jobId>-s<step>[-label]" or "<jobKey>-<rand>"), dir ("reports/<runId>/<key>"),
- *   jobId, jobName, stepNumber, stepName, label, attempt, attribution, collectedAt,
- *   reports: [ { name, path (site-relative), summary, summarySource, bytes } ]
+ *   key ("j<jobId>-s<step>[-label]" or "<jobKey>-<rand6>[-label]"), dir ("reports/<runId>/<key>"),
+ *   path (the primary report: "<dir>/report.html"),
+ *   jobId, jobName, jobUrl, stepNumber, stepName, label, attempt, attribution, superseded,
+ *   collectedAt, bytes (all report files),
+ *   reports: [ { name, label, path (site-relative), summary (no modules), summarySource, bytes } ]
  * }
  */
 
 function emptyHistory(repository) {
-  return { schemaVersion: SCHEMA_VERSION, repository: repository || null, repositoryUrl: null, defaultBranch: null, siteUrl: null, generatedAt: null, workflows: {}, runs: [] };
+  return {
+    schemaVersion: SCHEMA_VERSION, repository: repository || null, repositoryUrl: null, serverUrl: null, defaultBranch: null, siteUrl: null,
+    generatedAt: null, stats: { reportsCount: 0, reportsBytes: 0 }, workflows: {}, runs: [],
+  };
 }
 
 function loadHistory(file, repository) {
@@ -65,9 +71,13 @@ function normalizeHistory(raw, repository) {
   }
   h.repository = raw.repository || repository || null;
   h.repositoryUrl = raw.repositoryUrl || null;
+  h.serverUrl = raw.serverUrl || null;
   h.defaultBranch = raw.defaultBranch || null;
   h.siteUrl = raw.siteUrl || null;
   h.generatedAt = raw.generatedAt || null;
+  if (raw.stats && typeof raw.stats === 'object') {
+    h.stats = { reportsCount: Number(raw.stats.reportsCount) || 0, reportsBytes: Number(raw.stats.reportsBytes) || 0 };
+  }
   h.workflows = raw.workflows && typeof raw.workflows === 'object' ? raw.workflows : {};
   h.runs = Array.isArray(raw.runs) ? raw.runs.filter(r => r && typeof r.id === 'number') : [];
   for (const r of h.runs) {
