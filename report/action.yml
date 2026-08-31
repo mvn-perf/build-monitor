@@ -70,7 +70,7 @@ inputs:
     required: false
     default: 'false'
   commit-message:
-    description: Prefix of the inbox commit message ("<prefix>: <job> › <step>").
+    description: 'Prefix of the inbox commit message ("<prefix>: <job> › <step>").'
     required: false
     default: Add mvn-lens report
 
