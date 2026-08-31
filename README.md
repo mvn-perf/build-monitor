@@ -151,6 +151,14 @@ Full example: [`examples/build-monitor.yml`](examples/build-monitor.yml).
    gh api repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies --jq '.branch_policies[].name'
    gh api -X POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies -f name=gh-pages -f type=branch
    ```
+4. **Request one build after the switch.** Changing the source does not build
+   the new source: until something pushes to `gh-pages` (or the action runs
+   again) the site keeps serving whatever the previous source published, and
+   `GET /pages/builds/latest` still shows the old — possibly failed — build.
+   ```bash
+   gh api -X POST repos/<owner>/<repo>/pages/builds
+   gh api repos/<owner>/<repo>/pages/builds/latest --jq '"\(.status) \(.commit[0:7])"'   # → built <gh-pages sha>
+   ```
 
 The page lives at `https://<owner>.github.io/<repo>/`. The `pages: write`
 permission matters: per the
