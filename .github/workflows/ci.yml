@@ -27,7 +27,13 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: node --version
       - name: Unit tests
-        run: npm test
+        # The tests exercise the actions' failure paths, which print "::warning::" /
+        # "::error::" lines; stop-commands keeps the runner from turning those into
+        # annotations of this (passing) job.
+        run: |
+          echo "::stop-commands::end-of-tests"
+          npm test
+          echo "::end-of-tests::"
       - name: Syntax check (the sources run un-bundled on the runner's Node; nothing newer than Node 20)
         run: npm run lint
 
