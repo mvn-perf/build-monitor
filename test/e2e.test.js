@@ -22,7 +22,7 @@ const { fmtMs } = require('../src/util');
 const { summarizeModel } = require('../src/mvnlens');
 const M = require('../site/model');
 const { createFakeGitHub } = require('./fake-github');
-const { tmpDir, fakeReportHtml, fixtureModel, fakeRun, withEnv, captureOutputs } = require('./helpers');
+const { tmpDir, fakeReportHtml, fakeShellReportHtml, fixtureModel, fakeRun, withEnv, captureOutputs } = require('./helpers');
 
 const REPO = 'acme/widgets';
 const SERVER = 'https://github.com';
@@ -159,6 +159,16 @@ function workspace(model, writtenAt) {
   const file = path.join(dir, 'target', 'mvnlens', 'report.html');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, fakeReportHtml(model, { pako: true }));
+  fs.utimesSync(file, writtenAt / 1000, writtenAt / 1000);
+  return { dir, file };
+}
+
+/** The same, with the six-block dashboard shell a real mvn-lens report carries around its model. */
+function shellWorkspace(model, writtenAt) {
+  const dir = tmpDir('e2e-shell');
+  const file = path.join(dir, 'target', 'mvnlens', 'report.html');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, fakeShellReportHtml(model));
   fs.utimesSync(file, writtenAt / 1000, writtenAt / 1000);
   return { dir, file };
 }
@@ -475,4 +485,68 @@ test('report (two jobs) → summary (final job) → build-monitor (workflow_run)
     const m = M.normalize(h);
     assert.equal(m.series.length, 2, 'the superseded report does not open a third series');
   });
+});
+
+// ---------------------------------------------------------------------------
+
+test('the dashboard shell makes the whole trip: split in the build jobs, stored once at the site root', async () => {
+  const live = clone(FINAL);
+  const fake = createFakeGitHub({ repository: REPO, workflows: WORKFLOWS, runs: [live], pages: { html_url: SITE } });
+  const javadocModel = fixtureModel();
+  javadocModel.session.totalMs = 12345;
+  const javaKey = `j${JAVA}-s3`;
+  const javadocKey = `j${JAVADOC}-s3`;
+
+  // Two jobs of one run, two different builds of the same mvn-lens: two data
+  // blocks, one shell. Each job publishes the shell into its own key directory.
+  runState(live, 'running');
+  jobState(live, JAVA, 'running', 4);
+  jobState(live, JAVADOC, 'running', 4);
+  jobState(live, MONITORING, 'queued');
+  const java = await runReport(fake, shellWorkspace(fixtureModel(), JAVA_REPORT_AT), { GITHUB_JOB: 'java', RUNNER_NAME: 'GitHub Actions 21' });
+  const javadoc = await runReport(fake, shellWorkspace(javadocModel, JAVADOC_REPORT_AT), { GITHUB_JOB: 'javadoc', RUNNER_NAME: 'GitHub Actions 22' });
+  assertClean(java.stdout, 'report (java)');
+  assertClean(javadoc.stdout, 'report (javadoc)');
+  assert.equal(java.out.key, javaKey);
+  assert.equal(javadoc.out.key, javadocKey);
+
+  runState(live, 'done');
+  for (const id of [JAVA, JAVADOC, MONITORING]) jobState(live, id, 'done');
+  const proc = await runProcessor(fake, eventFile(live));
+  assertClean(proc.stdout, 'processor');
+  assert.equal(proc.res.exitCode, 0);
+  assert.equal(proc.out['reports-collected'], '2');
+
+  // The site holds ONE shell, at the root, and no key directory kept a copy.
+  const shell = fake.store.listDir('gh-pages', 'assets');
+  assert.equal(shell.length, 3, `one stylesheet and two scripts: ${shell.join(', ')}`);
+  for (const key of [javaKey, javadocKey]) assert.deepEqual(fake.store.listDir('gh-pages', `reports/${RUN_ID}/${key}`), ['meta.json', 'report.html']);
+
+  // What the browser will do on the Pages origin: every subresource URL of a
+  // published report, resolved against the report's own directory, must be a
+  // file that is actually on the branch — the split is only ever as good as
+  // the '../../../assets/' guess about where reports live.
+  for (const key of [javaKey, javadocKey]) {
+    const dir = `reports/${RUN_ID}/${key}`;
+    const html = String(fake.store.readFile('gh-pages', `${dir}/report.html`));
+    const refs = [];
+    const re = /(?:src|href)="([^"]+)"/g;
+    for (let m = re.exec(html); m; m = re.exec(html)) refs.push(m[1]);
+    assert.equal(refs.length, 3, `${key}: three subresources, ${refs.join(', ')}`);
+    for (const ref of refs) {
+      const resolved = path.posix.join(dir, ref);   // the URL a browser would request, relative to the report's directory
+      assert.match(resolved, /^assets\/lens-[0-9a-f]{12}\.(?:js|css)$/, `${ref} from ${dir}`);
+      assert.ok(fake.store.readFile('gh-pages', resolved), `${ref} resolves to ${resolved}, which is on the branch`);
+    }
+    assert.ok(html.indexOf('assets/') < html.indexOf('<script id="mvnlens-data"'), `${key}: the shell starts loading before the data block`);
+  }
+
+  // The point of the whole exercise: the shell is stored once, and it is the
+  // big half of a report — two reports no longer carry it twice.
+  const shellBytes = shell.reduce((n, f) => n + fake.store.readFile('gh-pages', `assets/${f}`).length, 0);
+  const published = [javaKey, javadocKey].reduce((n, key) => n + fake.store.readFile('gh-pages', `reports/${RUN_ID}/${key}/report.html`).length, 0);
+  assert.ok(published < shellBytes, `the two published reports (${published} B) are smaller than the shell they share (${shellBytes} B)`);
+  const h = JSON.parse(String(fake.store.readFile('gh-pages', 'data/history.json')));
+  assert.equal(h.stats.reportsCount, 2);
+  assert.equal(h.stats.reportsBytes, published, 'the recorded bytes are the report files, the shell being none of them');
 });

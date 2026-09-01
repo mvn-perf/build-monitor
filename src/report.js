@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const util = require('./util');
 const { GitHubApi } = require('./github-api');
 const { GitStore, GitStoreError } = require('./gitstore');
-const { readReportSummary, compressReportHtml } = require('./mvnlens');
+const { readReportSummary, compressReportHtml, splitReportHtml } = require('./mvnlens');
 const { locateJobAndStep } = require('./locate');
 const { githubContext, resolveSiteUrl, monitorUrls, inboxRef, DEFAULT_INBOX_PREFIX } = require('./context');
 const { isValidKey } = require('./history');
@@ -159,6 +159,20 @@ async function publish(inputs, r, o) {
 
   // ---- 5. Commit to the inbox ref ---------------------------------------------
   const entries = reports.map(rep => ({ path: `${dir}/${rep.name}`, content: rep.content }));
+  // The shared shell assets go INTO this key directory: a valid inbox path is
+  // exactly reports/<runId>/<key>/<file> (history.REPORT_PATH_RE), so there is
+  // no room for a root-level one — the processor is what moves them to the site
+  // root. They are pushed unconditionally, outside the `upToDate` branch below:
+  // chooseKey only compares the report files, so a key it calls up to date must
+  // still be able to gain an asset it is missing (commitFiles then decides
+  // whether anything changed at all).
+  const assets = shellAssets(reports);
+  const known = await findInboxAssets(store, head, ctx.runId, assets);
+  for (const a of assets) {
+    const sha = known.get(a.name);
+    if (sha) debug(`build-monitor: ${a.name} is already in the inbox of run ${ctx.runId}; grafting it by sha (${fmtBytes(a.bytes)} not uploaded)`);
+    entries.push(sha ? { path: `${dir}/${a.name}`, type: 'blob', sha } : { path: `${dir}/${a.name}`, content: a.content });
+  }
   if (chosen.upToDate) {
     log(`build-monitor: ${dir} already holds these exact reports; keeping its meta.json`);
   } else {
@@ -174,7 +188,7 @@ async function publish(inputs, r, o) {
   r.commitSha = res.sha;
   r.reason = null;
   const bytes = reports.reduce((t, rep) => t + rep.bytes, 0);
-  log(`build-monitor: ${res.changed ? (res.created ? 'created' : 'updated') : 'already up to date:'} refs/${ref} @ ${res.sha} — ${dir} (${reports.length} report${reports.length > 1 ? 's' : ''}, ${fmtBytes(bytes)}${res.attempts ? `, ${res.attempts} CAS retr${res.attempts > 1 ? 'ies' : 'y'}` : ''}; ${api.requests} API requests)`);
+  log(`build-monitor: ${res.changed ? (res.created ? 'created' : 'updated') : 'already up to date:'} refs/${ref} @ ${res.sha} — ${dir} (${reports.length} report${reports.length > 1 ? 's' : ''}, ${fmtBytes(bytes)}${assets.length ? ` + ${assets.length} shared asset${assets.length > 1 ? 's' : ''}` : ''}${res.attempts ? `, ${res.attempts} CAS retr${res.attempts > 1 ? 'ies' : 'y'}` : ''}; ${api.requests} API requests)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +211,10 @@ function findReports(patterns) {
  * Reads the matched files: only files that embed an mvn-lens model are kept
  * (the report HTML ends up on the Pages origin, so nothing else is published).
  * Each entry: { file, name ('report.html', 'report-2.html'…), content (Buffer),
- * sha, bytes, mtimeMs, summary, source, compressed, originalPath, label }.
+ * sha, bytes, mtimeMs, summary, source, compressed, assets, originalPath, label }.
+ *
+ * The file on disk is never touched: the self-contained report stays the CI
+ * artifact, only the published copy is re-encoded and split.
  */
 function readReports(files, compress) {
   const reports = [];
@@ -210,6 +227,7 @@ function readReports(files, compress) {
     }
     let content = fs.readFileSync(file);
     let compressed = false;
+    let assets = [];
     if (compress) {
       const c = compressReportHtml(content.toString('utf8'));
       if (c.compressed) {
@@ -219,6 +237,21 @@ function readReports(files, compress) {
       } else {
         log(`build-monitor: ${file}: not compressed (${c.reason}), ${fmtBytes(c.before)}`);
       }
+      // The shell is split out AFTER the re-encoding, on purpose: compression
+      // rewrites the data block only, so the blocks around it are still the
+      // bytes every other report of every other run carries — and splitting
+      // first would move pako out of the document, leaving the compressor with
+      // no inflater to check for. (c.html is the input unchanged when the
+      // compressor declined, so it is the published report either way; the
+      // file itself is not decoded twice.)
+      const s = splitReportHtml(c.html);
+      if (s.split) {
+        content = Buffer.from(s.html, 'utf8');
+        assets = s.assets;
+        log(`build-monitor: ${file}: shell split into ${assets.length} shared asset(s), ${fmtBytes(s.before)} → ${fmtBytes(s.after)}`);
+      } else {
+        log(`build-monitor: ${file}: shell not split (${s.reason})`);
+      }
     } else {
       log(`build-monitor: ${file}: compression disabled, ${fmtBytes(content.length)}`);
     }
@@ -227,7 +260,7 @@ function readReports(files, compress) {
     const rel = path.relative(cwd, file);
     reports.push({
       file, name: null, content, sha: GitStore.blobSha(content), bytes: content.length, mtimeMs,
-      summary, source, compressed,
+      summary, source, compressed, assets,
       originalPath: toPosix(!rel || rel.startsWith('..') || path.isAbsolute(rel) ? file : rel),
       label: null,
     });
@@ -258,6 +291,64 @@ function reportLabels(files) {
     if (new Set(names).size > 1) return names;
   }
   return dirs.map(d => d[1] || d[0] || null);
+}
+
+// ---------------------------------------------------------------------------
+// Shared shell assets
+// ---------------------------------------------------------------------------
+
+/**
+ * The shell assets of every report, deduplicated by name. Reports published by
+ * one step normally come out of the same mvn-lens version and therefore share
+ * a shell; the name IS the content hash, so they contribute one file each,
+ * never one per report.
+ */
+function shellAssets(reports) {
+  const assets = [];
+  const seen = new Set();
+  for (const rep of reports) {
+    for (const a of rep.assets || []) {
+      if (seen.has(a.name)) continue;
+      seen.add(a.name);
+      assets.push(a);
+    }
+  }
+  return assets;
+}
+
+/**
+ * The wanted assets the run's inbox already holds, as name → blob sha.
+ *
+ * One CI run is one inbox ref shared by every job of the run — an assertj run
+ * is 13 jobs, each publishing the same 1.4 MB shell — and every job writes
+ * into its OWN key directory. GitStore skips an upload only when the head tree
+ * already carries that sha at that exact PATH, so without this lookup the
+ * shell would travel 13 times to reach 13 paths holding one git object.
+ * Grafting it by sha costs one small tree read per key instead.
+ *
+ * The name is a content hash, but the inbox is written by build jobs with a
+ * contents:write token: a blob is reused only when its sha is the sha of the
+ * bytes this job would otherwise have uploaded. And failing to look is never
+ * fatal — an unreadable inbox just means the bytes travel.
+ */
+async function findInboxAssets(store, head, runId, assets) {
+  const found = new Map();
+  if (!head || !assets.length) return found;
+  const want = new Map(assets.map(a => [a.name, GitStore.blobSha(a.content)]));   // hashing 1.4 MB is worth doing once
+  try {
+    for (const ke of await store.listDir(head.treeSha, `reports/${runId}`)) {
+      if (ke.type !== 'tree') continue;
+      for (const a of assets) {
+        if (found.has(a.name)) continue;
+        const e = await store.findEntry(head.treeSha, `reports/${runId}/${ke.path}/${a.name}`);
+        if (e && e.type === 'blob' && e.sha === want.get(a.name)) found.set(a.name, e.sha);
+      }
+      if (found.size === assets.length) break;
+    }
+  } catch (e) {
+    debug(`build-monitor: could not look for shared assets in the inbox of run ${runId} (${e.message}); uploading them`);
+  }
+  return found;
 }
 
 // ---------------------------------------------------------------------------

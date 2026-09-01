@@ -170,4 +170,47 @@ function captureOutputs(dir) {
   };
 }
 
-module.exports = { FIXTURES, PAKO_BANNER, tmpDir, fakeReportHtml, fixtureModel, fakeRun, isoAt, withEnv, captureOutputs, parseOutputs };
+/**
+ * The shell of a real mvn-lens report: three stylesheets, the vendor bundle
+ * (pako and friends) and the app bootstrap. Padded, because splitReportHtml
+ * declines a shell under 64 KiB — a real one is 1.4 MB — and constant, because
+ * "every report carries the same bytes here" is the property the split exists
+ * for. The bootstrap reads the data block by id, like the real renderer, so a
+ * split that hoisted it above that block would be visibly wrong.
+ */
+const SHELL_STYLES = [
+  `.mvnlens-timeline{position:relative}\n/* vis-timeline ${'-'.repeat(12000)} */`,
+  `.mvnlens-chart{display:block}\n/* Chart.js ${'-'.repeat(12000)} */`,
+  `.mvnlens-table td{padding:2px}\n/* dashboard ${'-'.repeat(12000)} */`,
+];
+const SHELL_VENDOR = `${PAKO_BANNER}\n(function(){window.pako={ungzip:function(b,o){return "";}};})();`
+  + `\n/* d3 + Chart.js + vis-timeline + moment ${'-'.repeat(30000)} */`;
+const SHELL_APP = '/* mvn-lens dashboard bootstrap */\n'
+  + 'var el=document.getElementById("mvnlens-data");var raw=el?el.textContent:"";var text=raw;\n'
+  + 'if(raw.indexOf("gzip:")===0){var bytes=Uint8Array.from(atob(raw.slice(5)),function(c){return c.charCodeAt(0)});'
+  + 'text=window.pako ? window.pako.ungzip(bytes, { to: "string" }) : "";}\n'
+  + `window.MVNLENS_MODEL=JSON.parse(text||"null");\n/* renderer ${'-'.repeat(12000)} */`;
+
+/**
+ * A report shaped like the real mvn-lens dashboard, for the shell split: three
+ * CONTIGUOUS <style> blocks, the vendor <script>, the JSON data block and the
+ * app bootstrap that reads it — the six blocks splitReportHtml recognises,
+ * around a shell big enough to be worth splitting. The shell is byte-identical
+ * whatever the model is; only the data block differs.
+ * opts: { gzip, id } as fakeReportHtml, plus { app: extra bootstrap source }.
+ */
+function fakeShellReportHtml(model, opts) {
+  const o = opts || {};
+  const json = JSON.stringify(model).replace(/<\/script/gi, m => '<\\' + m.slice(1));   // case-preserving, like the renderer
+  const payload = o.gzip ? 'gzip:' + zlib.gzipSync(Buffer.from(json, 'utf8')).toString('base64') : json;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>mvn-lens</title>
+${SHELL_STYLES.map(css => `<style>${css}</style>`).join('\n')}
+</head><body>
+<div id="app"></div>
+<script>${SHELL_VENDOR}</script>
+<script id="${o.id || 'mvnlens-data'}" type="application/json">${payload}</script>
+<script>${SHELL_APP}${o.app || ''}</script>
+</body></html>`;
+}
+
+module.exports = { FIXTURES, PAKO_BANNER, tmpDir, fakeReportHtml, fixtureModel, fakeRun, isoAt, withEnv, captureOutputs, parseOutputs, fakeShellReportHtml };

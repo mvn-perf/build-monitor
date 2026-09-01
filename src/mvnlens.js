@@ -7,9 +7,20 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 
 /** Modules kept in a summary (history size). */
 const MAX_MODULES = 200;
+
+/**
+ * Where a published report finds the shared shell. history.reportDirFor fixes the
+ * published shape at reports/<runId>/<key>/report.html — always exactly three
+ * levels below the site root, whatever `site-dir` is — so the reference is a
+ * constant, not something the report step computes.
+ */
+const ASSET_REF_PREFIX = '../../../assets/';
+/** Below this the split costs more than it saves: three more requests to spare a few KB. */
+const MIN_SHELL_BYTES = 64 * 1024;
 
 /**
  * Reads the model an mvn-lens report embeds.
@@ -176,9 +187,155 @@ function compressReportHtml(html) {
   return { html: out, compressed: true, reason: null, before, after: Buffer.byteLength(out, 'utf8') };
 }
 
+/**
+ * Splits the mvn-lens dashboard SHELL out of a report so the site stores it once.
+ *
+ * A report.html is a self-contained dashboard built from six blocks: three
+ * contiguous <style> blocks, the vendor <script> (d3, Chart.js, vis-timeline,
+ * pako, moment), the JSON data block and the app bootstrap <script>. Only the
+ * data block differs between two reports — measured over 39 real reports the
+ * 1.4 MB around it is byte-identical, and the site stored that shell once per
+ * report (53 % of a 99.6 MB site). Each shell block is replaced by a reference
+ * to a content-hashed asset AT THE BLOCK'S OWN OFFSET: the document order is
+ * unchanged, so the bootstrap still runs AFTER the data block it reads with
+ * document.getElementById("mvnlens-data"). Hoisting it above that block (by
+ * merging the two <script> blocks into one asset, say) makes getElementById
+ * return null and every report render empty.
+ *
+ * Nothing here is undone on the site: a shell that cannot be recognised is left
+ * inline. A report that is 1.4 MB too big still renders; one that lost a block
+ * does not.
+ *
+ * @param {string} html the report, compressed first (see compressReportHtml:
+ *   the shell is the same bytes whatever the data block holds)
+ * @returns {{html: string, split: boolean, reason: string|null, assets: Array<{name: string, content: Buffer, bytes: number}>, before: number, after: number}}
+ */
+function splitReportHtml(html) {
+  const before = Buffer.byteLength(html, 'utf8');
+  const decline = (reason) => ({ html, split: false, reason, assets: [], before, after: before });
+  const m = /<script\s+id="(?:mvnlens|mvnflight)-data"\s+type="application\/json"\s*>/i.exec(html);
+  if (!m) return decline('no embedded model');
+  if (html.indexOf('</script>', m.index + m[0].length) < 0) return decline('unterminated data block');
+
+  // The blocks, in document order. The scan jumps over each body instead of
+  // searching the whole text: the app bootstrap carries a literal
+  // '<script id="mvnlens-data" type="application/json">' of its own (the real
+  // javadoc report does), and only a scan that skips bodies ignores that decoy.
+  //
+  // It jumps over HTML comments for the same reason, and the stakes are higher
+  // there: a start tag merely QUOTED in a comment ('<!-- the <script> below is
+  // generated -->' — the real report carries a NOTICE comment right where the
+  // scan passes) is not a block, and reading it as one sends the scan looking
+  // for the next '</script>', which carries the comment's '-->' into the asset.
+  // The published report would then be a single unterminated comment
+  // swallowing the data block and the bootstrap reference: a blank page,
+  // logged as a successful split. A comment that never ends is a shape this
+  // function cannot make sense of, so it declines like any other.
+  const blocks = [];
+  let dataSeen = false;
+  const open = /<!--|<(script|style)\b([^>]*)>/gi;
+  for (let at = 0; ;) {
+    open.lastIndex = at;
+    const t = open.exec(html);
+    if (!t) break;
+    if (!t[1]) {
+      const stop = html.indexOf('-->', t.index + 4);
+      if (stop < 0) return decline('unterminated HTML comment');
+      at = stop + 3;
+      continue;
+    }
+    const tag = t[1].toLowerCase();
+    const close = `</${tag}>`;
+    const bodyStart = t.index + t[0].length;
+    const bodyEnd = html.indexOf(close, bodyStart);
+    if (bodyEnd < 0) return decline(`unterminated <${tag}> block`);
+    at = bodyEnd + close.length;
+    if (t.index === m.index) { dataSeen = true; continue; }   // the anchor: never moved, never externalised
+    if (t[2].trim()) return decline(`unexpected attributes on <${tag}>`);
+    const body = html.slice(bodyStart, bodyEnd);
+    // Cutting at the first '</tag>' leaves no complete one behind, but a stray
+    // '</script' or '</style' would have to be re-escaped for the browser to
+    // read the block back the same way. Leave such a report alone.
+    if (body.includes(`</${tag}`)) return decline(`a <${tag}> block contains "</${tag}"`);
+    blocks.push({ tag, start: t.index, end: at, body });
+  }
+  // The data block is the anchor of the whole rewrite: if the scan never met it
+  // at top level it is nested in some other block, and that block's body would
+  // be moved to an external file — data and all.
+  if (!dataSeen) return decline('the data block is not a top-level block');
+
+  const styles = blocks.filter(b => b.tag === 'style');
+  const scripts = blocks.filter(b => b.tag === 'script');
+  if (!scripts.length) return decline('no <script> block besides the data block');
+  for (let i = 1; i < styles.length; i++) {
+    if (html.slice(styles[i - 1].end, styles[i].start).trim()) return decline('the <style> blocks are not contiguous');
+  }
+
+  const reps = [];
+  if (styles.length) {
+    // The contiguous <style> run becomes one stylesheet, replaced as a whole:
+    // the whitespace between the blocks travels into the asset, so nothing but
+    // the three pairs of tags is lost.
+    let css = styles[0].body;
+    for (let i = 1; i < styles.length; i++) css += html.slice(styles[i - 1].end, styles[i].start) + styles[i].body;
+    const a = shellAsset(css, 'css');
+    reps.push({ start: styles[0].start, end: styles[styles.length - 1].end, text: assetReference(a), asset: a });
+  }
+  for (const b of scripts) {
+    const a = shellAsset(b.body, 'js');
+    reps.push({ start: b.start, end: b.end, text: assetReference(a), asset: a });
+  }
+  reps.sort((x, y) => x.start - y.start);
+
+  const assets = [];
+  const seen = new Set();
+  for (const rep of reps) if (!seen.has(rep.asset.name)) { seen.add(rep.asset.name); assets.push(rep.asset); }
+  const shell = assets.reduce((n, a) => n + a.bytes, 0);
+  if (shell < MIN_SHELL_BYTES) return decline(`the shell is ${shell} bytes, under the ${MIN_SHELL_BYTES}-byte split threshold`);
+
+  let out = '';
+  let cursor = 0;
+  let dataAt = m.index;
+  for (const rep of reps) {
+    out += html.slice(cursor, rep.start) + rep.text;
+    cursor = rep.end;
+    if (rep.end <= m.index) dataAt += rep.text.length - (rep.end - rep.start);
+  }
+  out += html.slice(cursor);
+
+  // The two invariants the renderer depends on, checked rather than trusted —
+  // both hold by construction, and both break every report silently when they
+  // do not: the data block is where it was (relative to what precedes it), and
+  // every block that followed it still loads after it.
+  if (!out.startsWith(html.slice(m.index, m.index + m[0].length), dataAt)) return decline('the data block moved');
+  for (const rep of reps) {
+    if (rep.start > m.index && out.indexOf(rep.text, dataAt) < 0) return decline('a block that followed the data block would load before it');
+  }
+  return { html: out, split: true, reason: null, assets, before, after: Buffer.byteLength(out, 'utf8') };
+}
+
+/**
+ * A shell block as a content-addressed asset: the same bytes always get the
+ * same name (sha256, 48 bits of it), so two reports sharing a shell publish one
+ * file and republishing it is a no-op. The name is the whole contract with the
+ * processor, which whitelists it with an anchored regex before it lands on the
+ * Pages origin as executable JavaScript.
+ */
+function shellAsset(body, ext) {
+  const content = Buffer.from(body, 'utf8');
+  return { name: `lens-${crypto.createHash('sha256').update(content).digest('hex').slice(0, 12)}.${ext}`, content, bytes: content.length };
+}
+
+/** The markup replacing a block: classic (parser-blocking, in-order) tags, so the load order is the block order. */
+function assetReference(a) {
+  return a.name.endsWith('.css')
+    ? `<link rel="stylesheet" href="${ASSET_REF_PREFIX}${a.name}">`
+    : `<script src="${ASSET_REF_PREFIX}${a.name}"></script>`;
+}
+
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function str(v) { return v === undefined || v === null ? null : String(v); }
 function sumBy(list, key) { let t = 0; for (const e of list) t += num(e && e[key]); return t; }
 function pick(obj, keys) { const o = {}; for (const k of keys) if (obj[k] !== undefined) o[k] = obj[k]; return o; }
 
-module.exports = { extractModelFromHtml, summarizeModel, readReportSummary, compressReportHtml, MAX_MODULES };
+module.exports = { extractModelFromHtml, summarizeModel, readReportSummary, compressReportHtml, splitReportHtml, MAX_MODULES };

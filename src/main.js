@@ -34,6 +34,18 @@ const COMMIT_BUDGET_MS = 10 * 60 * 1000;
 const RATE_LIMIT_WAIT_MS = 10 * 60 * 1000;
 /** Report files inside a key directory (the report step writes report.html; several reports of one step get suffixes). */
 const REPORT_FILE_RE = /^report[A-Za-z0-9._-]*\.html$/i;
+/**
+ * The shared mvn-lens dashboard shell, split out of report.html by the report
+ * step (mvnlens.splitReportHtml) and referenced from it as
+ * `../../../assets/<name>`. The name is "lens-" + 12 hex of the sha256 of the
+ * content, and this regex is the whole contract: these blobs land on the Pages
+ * origin as executable JavaScript and a stylesheet, so the shape is pinned
+ * exactly — anchored, lower-case hex, a fixed length and two extensions — and
+ * is a security boundary, not a convenience filter.
+ */
+const ASSET_FILE_RE = /^lens-[0-9a-f]{12}\.(?:js|css)$/;
+/** Where the shared assets live on the site: the site root, whatever `site-dir` is (see ASSET_REF_PREFIX). */
+const ASSET_DIR = 'assets';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const BAD_BRANCH_RE = /[\s~^:?*[\\]|\.\.|@\{|^\/|\/$|^-|\.lock$|(^|\/)\.|\.$/;
 /** Most recent runs listed in the job summary. */
@@ -185,26 +197,34 @@ function isRegularBlob(e) {
 /**
  * The entries of one key directory that MAY be published, and nothing else.
  * The inbox is written by build jobs with a contents:write token, so its trees
- * are untrusted input: only regular blobs (100644/100755) named `report*.html`
- * or `meta.json`, whose resulting site path passes `history.isValidReportPath`,
- * are accepted. Nested directories, symlinks, submodules and stray files are
- * refused with a warning — they must never reach the Pages site, where nothing
- * counts or removes them.
+ * are untrusted input: only regular blobs (100644/100755) named `report*.html`,
+ * `meta.json` or `lens-<12 hex>.js|css`, whose resulting site path passes
+ * `history.isValidReportPath`, are accepted. Nested directories, symlinks,
+ * submodules and stray files are refused with a warning — they must never reach
+ * the Pages site, where nothing counts or removes them.
  *
- * @returns {{ reports: object[], meta: object|null }} tree entries, report.html first
+ * The three categories are kept apart because they end up in three different
+ * places: reports are published under the key and listed in the history, the
+ * meta travels with them unlisted, and the shared shell assets are lifted to
+ * the site root (they are one file for the whole site, not one per key).
+ *
+ * @returns {{ reports: object[], assets: object[], meta: object|null }} tree entries, report.html first
  */
 function selectReportFiles(entries, dir, where) {
   const reports = [];
+  const assets = [];
   let meta = null;
   for (const e of entries || []) {
     if (isRegularBlob(e) && history.isValidReportPath(`${dir}/${e.path}`)) {
       if (e.path === 'meta.json') { meta = e; continue; }
       if (REPORT_FILE_RE.test(e.path)) { reports.push(e); continue; }
+      if (ASSET_FILE_RE.test(e.path)) { assets.push(e); continue; }
     }
     warning(`${where}: ${dir}/${e.path} (${e.type}, mode ${e.mode}) is not an mvn-lens report file; not published and not listed`);
   }
   reports.sort((a, b) => (a.path === 'report.html' ? -1 : 0) - (b.path === 'report.html' ? -1 : 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return { reports, meta };
+  assets.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { reports, assets, meta };
 }
 
 /**
@@ -553,6 +573,27 @@ async function execute(p) {
             const sitePrefix = posixJoin(inputs.siteDir, 'reports', String(t.id), ke.path);
             for (const f of selection.reports) grafts.push({ path: `${sitePrefix}/${f.path}`, type: 'blob', mode: f.mode, sha: f.sha });
             if (selection.meta) grafts.push({ path: `${sitePrefix}/meta.json`, type: 'blob', mode: selection.meta.mode, sha: selection.meta.sha });
+            // The shared dashboard shell is lifted OUT of the key to the site
+            // root: every report of every run references the same file as
+            // ../../../assets/<name>, and storing it once is the whole point of
+            // the split. It only travels through the key because an inbox path
+            // is exactly reports/<runId>/<key>/<file> (history.REPORT_PATH_RE
+            // leaves no room for a root-level one), so this is where it lands.
+            //
+            // A published asset is immutable: the name is the sha256 of the
+            // content, so the same name is the same bytes. One that is not
+            // comes from an inbox that named a file it did not hash, and
+            // grafting it would swap the shell under every report ALREADY on
+            // the site that loads that name. The site keeps what it has.
+            for (const f of selection.assets) {
+              const assetPath = posixJoin(inputs.siteDir, ASSET_DIR, f.path);
+              const onSite = head ? await store.findEntry(head.treeSha, assetPath) : null;
+              if (onSite && onSite.sha !== f.sha) {
+                warning(`run ${t.id}: ${dir}/${f.path} is not the ${assetPath} already on ${inputs.branch} (${onSite.sha}); not published — a shared asset name is the sha256 of its content`);
+                continue;
+              }
+              grafts.push({ path: assetPath, type: 'blob', mode: f.mode, sha: f.sha });
+            }
             graftedKeys++;
             inboxAttempt = Math.max(inboxAttempt, safeInt(entry.attempt) || 1);
             files += entry.reports.length;
@@ -589,8 +630,23 @@ async function execute(p) {
 
   // ---- 6. Render ------------------------------------------------------------
   const indexHtml = renderIndexHtml({ title, dataset: null });
+  // Report and meta grafts have a path of their own, but every key of every run
+  // grafts the SAME shell assets to the SAME site path — and commitFiles
+  // refuses a duplicate path outright. The name is the content hash, so the
+  // repeats normally carry the same sha and dropping them changes nothing; one
+  // that does not comes from an inbox that forged a content-addressed name, and
+  // silently swapping the file every published report loads is not something to
+  // do quietly. The first entry (runs newest first) is kept either way, so the
+  // site keeps a shell some report on it was actually built against.
   const allGrafts = [];
-  for (const x of processed) allGrafts.push(...x.grafts);
+  const graftedPaths = new Map();
+  for (const x of processed) {
+    for (const g of x.grafts) {
+      const seen = graftedPaths.get(g.path);
+      if (seen === undefined) { graftedPaths.set(g.path, g.sha); allGrafts.push(g); continue; }
+      if (seen !== g.sha) warning(`${g.path} is claimed by two different blobs (${seen} and ${g.sha}); publishing the first — a shared asset name is the sha256 of its content, so an inbox wrote a name it did not compute`);
+    }
+  }
   const renderFiles = (h, previousText) => {
     finalizeHistory(h, facts);
     // generatedAt moves only when the content moved: an unchanged site is not a new commit (nor a Pages build).

