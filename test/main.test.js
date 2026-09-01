@@ -15,9 +15,9 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { run, markSuperseded, slimSummary } = require('../src/main');
-const { summarizeModel } = require('../src/mvnlens');
+const { summarizeModel, splitReportHtml } = require('../src/mvnlens');
 const { createFakeGitHub } = require('./fake-github');
-const { tmpDir, fakeReportHtml, fixtureModel, fakeRun, withEnv, captureOutputs } = require('./helpers');
+const { tmpDir, fakeReportHtml, fakeShellReportHtml, fixtureModel, fakeRun, withEnv, captureOutputs } = require('./helpers');
 
 const REPO = 'acme/widgets';
 const PAGES = { html_url: 'https://acme.github.io/widgets/' };
@@ -73,6 +73,23 @@ function seedInbox(fake, run, sets) {
     if (s.meta !== null) files[`reports/${run.id}/${s.key}/meta.json`] = JSON.stringify(s.meta || {});
   }
   return fake.store.seedBranch(`build-monitor-inbox/${run.id}`, files);
+}
+
+/** A report as the report step publishes it once the shared dashboard shell is split out of it. */
+function splitShellReport(model) {
+  const s = splitReportHtml(fakeShellReportHtml(model || fixtureModel()));
+  assert.equal(s.split, true, s.reason);
+  return s;
+}
+
+/** The inbox tree entries of one such report set: the HTML, its shell assets and meta.json. */
+function shellSet(runId, key, split, metaJson) {
+  const entries = [
+    { path: `reports/${runId}/${key}/report.html`, mode: '100644', type: 'blob', content: split.html },
+    { path: `reports/${runId}/${key}/meta.json`, mode: '100644', type: 'blob', content: JSON.stringify(metaJson) },
+  ];
+  for (const a of split.assets) entries.push({ path: `reports/${runId}/${key}/${a.name}`, mode: '100644', type: 'blob', content: a.content.toString('utf8') });
+  return entries;
 }
 
 /** The processor's environment: a workflow_dispatch of "Build monitor" by default; null deletes a variable. */
@@ -782,6 +799,154 @@ test('an inbox key is never grafted wholesale: symlinks, sub-directories and str
   const again = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0' });
   assert.equal(again.outputs.published, 'false');
   assert.deepEqual(fake.store.commitsOf('gh-pages'), commits);
+});
+
+// ---------------------------------------------------------------------------
+// The shared dashboard shell
+// ---------------------------------------------------------------------------
+
+test('the shared shell is lifted out of the keys to <site>/assets/, once for the whole site', async () => {
+  const run300 = ciRun(300);
+  const fake = createFakeGitHub({ repository: REPO, workflows: WORKFLOWS, runs: [run300], pages: PAGES });
+  const [j1, j2] = run300.jobs;
+  const other = fixtureModel();
+  other.session.totalMs = 4242;
+  const a = splitShellReport();
+  const b = splitShellReport(other);
+  const keyA = `j${j1.id}-s3`;
+  const keyB = `j${j2.id}-s3`;
+  const names = a.assets.map(x => x.name).sort();
+  assert.deepEqual(b.assets.map(x => x.name).sort(), names, 'the two reports of the run share their shell');
+  seedInboxTree(fake, 300, shellSet(300, keyA, a, meta(run300, j1, 3)).concat(shellSet(300, keyB, b, meta(run300, j2, 3))));
+
+  const res = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0' });
+  assert.equal(res.exitCode, 0);
+  assert.deepEqual(warningsOf(res), []);
+  assert.deepEqual(fake.store.listDir('gh-pages', ''), ['.nojekyll', 'assets', 'data', 'index.html', 'reports']);
+  assert.deepEqual(fake.store.listDir('gh-pages', 'assets'), names, 'one copy of the shell, not one per key');
+  for (const x of a.assets) assert.ok(Buffer.compare(fake.store.readFile('gh-pages', `assets/${x.name}`), x.content) === 0, x.name);
+
+  // The key directories keep the reports only, and '../../../assets/<name>'
+  // from reports/300/<key>/report.html is exactly the assets/ above.
+  for (const key of [keyA, keyB]) assert.deepEqual(fake.store.listDir('gh-pages', `reports/300/${key}`), ['meta.json', 'report.html']);
+  const published = String(fake.store.readFile('gh-pages', `reports/300/${keyA}/report.html`));
+  for (const x of a.assets) assert.ok(published.includes(`../../../assets/${x.name}`), `${x.name} is referenced by the report`);
+
+  // Both keys claim the same three asset paths; the tree carries each once, as
+  // a blob graft (a duplicate path would abort the whole publish).
+  const trees = fake.calls.filter(c => c.method === 'POST' && c.path.endsWith('/git/trees'));
+  assert.equal(trees.length, 1);
+  assert.deepEqual(trees[0].body.tree.filter(e => e.path.startsWith('assets/')).map(e => e.path).sort(), names.map(n => `assets/${n}`));
+  assert.deepEqual(trees[0].body.tree.filter(e => e.type === 'tree'), [], 'no tree entry is grafted');
+  assert.equal(fake.calls.filter(c => c.method === 'POST' && c.path.endsWith('/git/blobs')).length, 3,
+    'only history.json, index.html and .nojekyll were uploaded — the shell was grafted by sha');
+
+  // The history counts the reports, never the shell they share.
+  assert.equal(res.outputs['reports-collected'], '2');
+  assert.equal(res.outputs['reports-bytes'], String(Buffer.byteLength(a.html) + Buffer.byteLength(b.html)));
+  const entries = historyOf(fake).runs[0].mvnLens;
+  assert.deepEqual(entries.map(e => e.reports.map(x => x.name)), [['report.html'], ['report.html']]);
+  assert.deepEqual(historyOf(fake).stats, { reportsCount: 2, reportsBytes: Buffer.byteLength(a.html) + Buffer.byteLength(b.html) });
+
+  // A second invocation changes nothing: the assets are in the tree at those shas.
+  const commits = fake.store.commitsOf('gh-pages');
+  const again = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0' });
+  assert.equal(again.outputs.published, 'false');
+  assert.deepEqual(fake.store.commitsOf('gh-pages'), commits);
+});
+
+test('under a site-dir the shell lands beside the site, where the reports resolve it', async () => {
+  const run300 = ciRun(300);
+  const fake = createFakeGitHub({ repository: REPO, workflows: WORKFLOWS, runs: [run300], pages: PAGES });
+  const j1 = run300.jobs[0];
+  const split = splitShellReport();
+  const key = `j${j1.id}-s3`;
+  seedInboxTree(fake, 300, shellSet(300, key, split, meta(run300, j1, 3)));
+  const res = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0', INPUT_SITE_DIR: '/monitor/' });
+  assert.equal(res.exitCode, 0);
+  // monitor/reports/300/<key>/report.html + '../../../assets/' = monitor/assets/.
+  assert.deepEqual(fake.store.listDir('gh-pages', 'monitor'), ['.nojekyll', 'assets', 'data', 'index.html', 'reports']);
+  assert.deepEqual(fake.store.listDir('gh-pages', 'monitor/assets'), split.assets.map(x => x.name).sort());
+  assert.equal(fake.store.readFile('gh-pages', `assets/${split.assets[0].name}`), null, 'nothing is written outside the site directory');
+});
+
+test('a file that only looks like a shell asset is refused: the name IS the whitelist', async () => {
+  const run300 = ciRun(300);
+  const fake = createFakeGitHub({ repository: REPO, workflows: WORKFLOWS, runs: [run300], pages: PAGES });
+  const j1 = run300.jobs[0];
+  const split = splitShellReport();
+  const key = `j${j1.id}-s3`;
+  // These land on the Pages origin as executable JavaScript, so anything but
+  // "lens-" + 12 lower-case hex + .js|.css is refused — an inbox is written by
+  // build jobs, and a forged name is the one way to publish arbitrary bytes.
+  const forged = [
+    'lens-0123456789ab.map',      // neither a script nor a stylesheet
+    'lens-0123456789AB.js',       // upper case: the name must be recomputable from the content
+    'lens-0123456789abc.js',      // one hex digit too many
+    'lens-0123456789ab.js.map',   // the extension is not the last one
+    'lens-.js',                   // no hash at all
+    'nolens-0123456789ab.js',
+  ];
+  seedInboxTree(fake, 300, shellSet(300, key, split, meta(run300, j1, 3))
+    .concat(forged.map(p => ({ path: `reports/300/${key}/${p}`, mode: '100644', type: 'blob', content: `/* ${p} */alert(1)` })))
+    // A well-formed name is not enough either: a symlink is not a shell asset.
+    .concat([{ path: `reports/300/${key}/lens-cafebabe1234.js`, mode: '120000', type: 'blob', content: '../../../data/history.json' }]));
+
+  const res = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0' });
+  assert.equal(res.exitCode, 0);
+  assert.deepEqual(fake.store.listDir('gh-pages', 'assets'), split.assets.map(x => x.name).sort(), 'the real shell only');
+  const warns = warningsOf(res).join('\n');
+  for (const p of forged.concat(['lens-cafebabe1234.js'])) {
+    assert.equal(fake.store.readFile('gh-pages', `assets/${p}`), null, `assets/${p} must not be published`);
+    assert.equal(fake.store.readFile('gh-pages', `reports/300/${key}/${p}`), null, `reports/300/${key}/${p} must not be published`);
+    assert.match(warns, new RegExp(`reports/300/${key}/${p.replace(/\./g, '\\.')} \\(blob, mode \\d+\\) is not an mvn-lens report file`));
+  }
+  // The report set itself is published, junk and all.
+  assert.deepEqual(fake.store.listDir('gh-pages', `reports/300/${key}`), ['meta.json', 'report.html']);
+  assert.equal(res.outputs['reports-collected'], '1');
+});
+
+test('two inbox keys claiming one asset path with different bytes: the first wins, with a warning', async () => {
+  const run300 = ciRun(300);
+  const fake = createFakeGitHub({ repository: REPO, workflows: WORKFLOWS, runs: [run300], pages: PAGES });
+  const [j1, j2] = run300.jobs;
+  const split = splitShellReport();
+  const keyA = `j${j1.id}-s3`;   // listed first: keys come sorted out of the inbox tree
+  const keyB = `j${j2.id}-s3`;
+  const name = split.assets[0].name;
+  const forged = '/* not what this name hashes to */\n';
+  seedInboxTree(fake, 300, shellSet(300, keyA, split, meta(run300, j1, 3))
+    .concat(shellSet(300, keyB, split, meta(run300, j2, 3)))
+    .concat([{ path: `reports/300/${keyB}/${name}`, mode: '100644', type: 'blob', content: forged }]));
+
+  const res = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0' });
+  assert.equal(res.exitCode, 0, 'a duplicate path would otherwise abort the whole publish');
+  assert.ok(Buffer.compare(fake.store.readFile('gh-pages', `assets/${name}`), split.assets[0].content) === 0,
+    'the site keeps a shell the reports on it were built against');
+  assert.match(warningsOf(res).join('\n'), new RegExp(`assets/${name.replace(/\./g, '\\.')} is claimed by two different blobs`));
+  assert.equal(res.outputs['reports-collected'], '2', 'both report sets are published all the same');
+});
+
+test('an asset already on the branch is never overwritten by other bytes under its name', async () => {
+  const run300 = ciRun(300);
+  const fake = createFakeGitHub({ repository: REPO, workflows: WORKFLOWS, runs: [run300], pages: PAGES });
+  const j1 = run300.jobs[0];
+  const split = splitShellReport();
+  const key = `j${j1.id}-s3`;
+  const name = split.assets[0].name;
+  const onSite = '/* the shell the published reports already load */\n';
+  fake.store.seedBranch('gh-pages', { [`assets/${name}`]: onSite });
+  seedInboxTree(fake, 300, shellSet(300, key, split, meta(run300, j1, 3)));
+
+  const res = await invoke(fake, { INPUT_RUN_ID: '300', INPUT_SWEEP_RUNS: '0' });
+  assert.equal(res.exitCode, 0);
+  assert.equal(String(fake.store.readFile('gh-pages', `assets/${name}`)), onSite, 'the site keeps the bytes its reports were published against');
+  assert.match(warningsOf(res).join('\n'), new RegExp(`reports/300/${key}/${name.replace(/\./g, '\\.')} is not the assets/${name.replace(/\./g, '\\.')} already on gh-pages`));
+  // The other two assets are new names, so they are published as usual, and
+  // the report set itself is unaffected.
+  assert.deepEqual(fake.store.listDir('gh-pages', 'assets'), split.assets.map(x => x.name).sort());
+  assert.equal(res.outputs['reports-collected'], '1');
+  assert.ok(fake.store.readFile('gh-pages', `reports/300/${key}/report.html`));
 });
 
 test('a meta.json with wrong types is coerced before it reaches history.json', async () => {

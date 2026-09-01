@@ -183,13 +183,13 @@ mvn verify ─► target/mvnlens/report.html         workflow_run(CI completed) 
 report action (in each Maven job)                1. read gh-pages head + data/history.json
   · which job/step am I?  (Jobs API)             2. list refs/heads/build-monitor-inbox/*
   · Maven summary from the embedded model           (+ sweep: recent runs missing from history)
-  · re-encode the data block gzip+base64         3. per run: GET run + jobs → RunRecord;
+  · re-encode the data block, split the shell    3. per run: GET run + jobs → RunRecord;
   · ONE commit onto                                 read each key's meta.json from the inbox
-    refs/heads/build-monitor-inbox/12345         4. GRAFT reports/12345/<key> into the new
+    refs/heads/build-monitor-inbox/12345         4. GRAFT the key dir + the shell into the new
       reports/12345/<key>/report.html               gh-pages tree BY SHA — the report bytes
       reports/12345/<key>/meta.json                 are never re-uploaded, they just get
-    (compare-and-swap, retried: only this           a second name in the same repository
-    run's jobs ever contend)                     5. merge history, render index.html,
+      reports/12345/<key>/lens-<hash>.js|.css       a second name in the same repository
+    (compare-and-swap: only this run contends)   5. merge history, render index.html,
       │                                             ONE commit to gh-pages (compare-and-swap)
       ▼                                          6. POST /pages/builds  → the site updates
 summary action (final job)                       7. delete the grafted inbox refs
@@ -239,7 +239,7 @@ summary action (final job)                       7. delete the grafted inbox ref
 | `github-token` | `${{ github.token }}` | Needs `contents: write` (inbox commit) and `actions: read` (job/step lookup). |
 | `inbox-prefix` | `build-monitor-inbox/` | Branch namespace of the inbox refs; must match the other two actions. |
 | `site-url` | derived | Overrides `https://<owner>.github.io/<repo>/` for the links this step prints. |
-| `compress` | `true` | Losslessly re-encode the report's embedded JSON as gzip+base64 (22.8 MB → 2.9 MB); skipped when the report cannot inflate it. |
+| `compress` | `true` | Losslessly re-encode the report's embedded JSON as gzip+base64 (22.8 MB → 2.9 MB) and split out the shared dashboard shell (`assets/lens-<hash>.js\|.css`); skipped when the report is not built that way. |
 | `if-no-files-found` | `warn` | `warn`, `error` or `ignore` when no report exists. |
 | `fail-on-error` | `false` | Fail the step when publishing fails (default: warn, set outputs, exit 0 — publishing monitoring data should not break a build). |
 | `commit-message` | `Add mvn-lens report` | Prefix of the inbox commit message (`<prefix>: <job> › <step>`). |
@@ -351,6 +351,13 @@ Measured on real reports:
   encoding the report's own renderer already inflates (pako is inlined) — so
   it is **lossless**: 22.8 MB → **2.9 MB**, 2.8 MB → 1.6 MB. Only
   `report.html` is published, never `model.json` or JFR files.
+- What is left of a compressed report is mostly the dashboard itself, and
+  every report carries the same one: over 39 real reports the bytes outside
+  the data block are **byte-identical**, a 1.4 MB shell stored 39 times —
+  **53 % of a 99.6 MB site**. The `report` action splits it into
+  `assets/lens-<hash>.js|.css`, published once for the whole site (see
+  [Site layout](#site-layout-branch-gh-pages)), so the second report of a
+  given mvn-lens version costs only its own data.
 - One [assertj](https://github.com/mvn-perf/assertj) CI run adds **~35 MB** of
   compressed reports — measured on run `33402133042`: 13 reports totalling
   **34.7 MB**, published as 13 commits on one inbox ref. GitHub Pages serves
@@ -365,9 +372,11 @@ Measured on real reports:
   monitor workflow resets the site, keeping nothing.
 - API budget (`GITHUB_TOKEN`: 1 000 requests/hour/repository): a `report`
   step costs ~9–12 requests (jobs, inbox ref, Pages URL, two blobs, tree,
-  commit, ref), the processor a handful per run (run + jobs + meta blobs +
-  one commit). The job summary of the processor lists the requests actually
-  used.
+  commit, ref) plus the shell, which only the first job of a run uploads —
+  the others find it in the inbox and reference it by sha. The processor
+  costs a handful per run (run + jobs + meta blobs + one commit); it never
+  re-uploads report or shell bytes. The job summary of the processor lists
+  the requests actually used.
 - Deleting an inbox ref frees no reports, by design: the report blobs and trees
   were grafted into `gh-pages` **by sha**, so they stay reachable from the site
   branch — that is why publishing costs no second upload. Only the inbox
@@ -384,8 +393,22 @@ index.html                      the app (static; fetches the dataset)
 data/history.json               the dataset — schemaVersion 1, runs newest first (see src/history.js)
 reports/<runId>/<key>/report.html   key = j<jobId>-s<step>[-label]  (or <job key>-<random>[-label] when the
 reports/<runId>/<key>/meta.json     attribution written inside the build job   job could not be identified)
+assets/lens-<12 hex>.js|.css    the mvn-lens dashboard shell, shared by every report (see below)
 .nojekyll
 ```
+
+Every `report.html` is a self-contained mvn-lens dashboard, and outside its
+data block the file is **byte-identical from report to report** — measured on
+39 reports: one 1.4 MB shell (three stylesheets, the vendor bundle, the app
+bootstrap), stored 39 times, 53 % of a 99.6 MB site. The `report` action
+replaces each of those blocks, **at its own offset**, with a reference to
+`../../../assets/lens-<sha256 of the content>.js|.css`, and the processor
+lifts those files to the site root, where the same bytes are one file. The
+offsets are what makes it safe: the bootstrap reads its model with
+`document.getElementById("mvnlens-data")`, so it must still load *after* the
+data block. A report whose shape is not recognised is published whole, and the
+file in the build workspace is never touched — the self-contained report stays
+the CI artifact, only the published copy is split.
 
 `history.json` is plain JSON meant for other tooling too: every run with its
 jobs and steps (`number`, `name`, `conclusion`, `startedAt`, `completedAt`,

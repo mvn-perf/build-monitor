@@ -55,8 +55,9 @@ inputs:
   compress:
     description: >-
       Losslessly re-encode the report's embedded model as gzip+base64 (the
-      renderer inflates it; 22.8 MB → 2.9 MB). Skipped when the report cannot
-      inflate it.
+      renderer inflates it; 22.8 MB → 2.9 MB) and split the mvn-lens dashboard
+      shell (the 1.4 MB of stylesheets and libraries every report repeats) into
+      files the site stores once. Skipped when the report is not built that way.
     required: false
     default: 'true'
   if-no-files-found:
