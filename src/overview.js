@@ -20,8 +20,10 @@
  *                          the charts become tables with text bars, the
  *                          <details> sections stay <details> sections
  *
- * Reference: mvn-perf/mvn-lens main at c31c25f (2026-09-02) — the Overview
- * without the per-JVM "CPU usage" and "GC pause" tables PR #25 removed.
+ * Reference: mvn-perf/mvn-lens main at 3878a52 (2026-09-05) — the Overview
+ * without the per-JVM "CPU usage" and "GC pause" tables PR #25 removed, the
+ * Tests pane with the failed tests' exception, message and stack trace PR #26
+ * added (TestEntry.failure).
  *
  * The model is build output: names, messages and numbers can be anything, so
  * every string is validated, truncated and Markdown-escaped, and every table
@@ -40,6 +42,9 @@ const MAX_WARNINGS = 20;
 /** Failed tests listed (model.failedTests is uncapped) and slowest tests ranked (the dashboard's "Top 10 slowest tests"). */
 const MAX_FAILED_TESTS = 50;
 const MAX_SLOWEST_TESTS = 10;
+/** Stack trace lines kept per failed test, and characters per line (the listener caps the trace before; the report has it whole). */
+const MAX_STACK_LINES = 30;
+const MAX_STACK_LINE = 300;
 /** Mermaid gantt directive: bars twice the default height and 16 px labels, so the chart reads on the run page. */
 const GANTT_INIT = '%%{init: {"gantt": {"barHeight": 40, "barGap": 8, "fontSize": 16, "sectionFontSize": 16, "topPadding": 60, "leftPadding": 110}}}%%';
 /** Longest label / message kept from the model. */
@@ -202,7 +207,28 @@ function testItem(t) {
     name: named.name || null, className: named.className || null, method: named.method || null,
     module: moduleArtifact(str(t.module) || str(t.moduleKey)), framework: label(t.framework),
     durationMs: testDuration(t), status: label(testStatus(t)),
+    failure: failureOf(t.failure),
   };
+}
+/**
+ * TestEntry.failure (mvn-lens PR #26): the throwable's class, its message and
+ * its printed stack trace, as the test listener captured them in the fork.
+ * Null on passing entries and on reports written before it existed; any of
+ * the three may be null (JUnit Platform's own events carry the class alone).
+ * The trace is kept to MAX_STACK_LINES lines of MAX_STACK_LINE characters,
+ * tabs widened — the report has it whole.
+ */
+function failureOf(f) {
+  if (!isObj(f)) return null;
+  const exceptionType = label(f.exceptionType);
+  const msg = str(f.message) ? message(f.message) : null;
+  const stack = typeof f.stackTrace === 'string' ? f.stackTrace : null;   // not trimmed as a whole: the indentation of the first line is part of it
+  const all = stack ? stack.split(/\r?\n/).map(l => truncate(l.replace(/\t/g, '    ').trimEnd(), MAX_STACK_LINE)) : [];
+  while (all.length && !all[all.length - 1]) all.pop();
+  while (all.length && !all[0]) all.shift();
+  const stackLines = all.slice(0, MAX_STACK_LINES);
+  if (!exceptionType && !msg && !stackLines.length) return null;
+  return { exceptionType, message: msg, stackLines, stackDropped: all.length - stackLines.length };
 }
 /** "org.assertj:assertj-core:4.0.0-SNAPSHOT" → "assertj-core" (the table has no room for the coordinates; the full report has them). */
 function moduleArtifact(gav) {
@@ -644,11 +670,9 @@ function testsSection(t) {
   const badge = [nFailed ? `${nFailed} failed` : 'no failure', slowItems.length ? `${slowItems.length} slowest` : null].filter(Boolean).join(` ${DOT} `);
   const body = [];
   if (nFailed) {
-    body.push(`**${nFailed} failed test${nFailed === 1 ? '' : 's'}** ${DOT} every failure of the build, whatever its duration`, '');
-    body.push('| Test | Module | Framework | Duration | Status |', '|---|---|---|---:|---|');
-    for (const it of failedItems) body.push(row([testCell(it), escapeMd(it.module || DASH), escapeMd(it.framework || DASH), fmtMs(it.durationMs), `❌ ${escapeMd(it.status || 'FAILED')}`]));
-    if (nFailed > failedItems.length) body.push(row([`… ${nFailed - failedItems.length} more`, '', '', '', '']));
-    body.push('');
+    body.push(`**${nFailed} failed test${nFailed === 1 ? '' : 's'}** ${DOT} every failure of the build, whatever its duration, with the exception, the message and the stack trace the test listener captured`, '');
+    for (const it of failedItems) body.push(...failedTestBlock(it));
+    if (nFailed > failedItems.length) body.push(`… ${nFailed - failedItems.length} more failed test${nFailed - failedItems.length === 1 ? '' : 's'}: the report lists them all.`, '');
   } else {
     body.push('No failed test.', '');
   }
@@ -659,6 +683,29 @@ function testsSection(t) {
   }
   return details('Tests', badge, body);
 }
+/**
+ * One failed test, as a row of the dashboard's failed-tests list: status,
+ * module, framework, name and duration on one line, the headline ("type:
+ * message" — whichever the recording has) under it, then the stack trace in
+ * a code block. A four-backtick fence, and no run of four backticks kept in
+ * the trace, so no line of it can close the block.
+ */
+function failedTestBlock(it) {
+  const f = it.failure;
+  const cls = it.className || it.name || '?';
+  const name = it.method ? `${cls}#${it.method}` : cls;
+  const headline = !f ? null : (f.exceptionType && f.message ? `\`${code(f.exceptionType)}\`: ${escapeMd(f.message)}` : (f.exceptionType ? `\`${code(f.exceptionType)}\`` : (f.message ? escapeMd(f.message) : null)));
+  const lines = [`❌ **${escapeMd(name)}** ${DOT} ${escapeMd(it.module || DASH)} ${DOT} ${escapeMd(it.framework || DASH)} ${DOT} ${fmtMs(it.durationMs)} ${DOT} ${escapeMd(it.status || 'FAILED')}${headline ? '  ' : ''}`];
+  if (headline) lines.push(headline);
+  lines.push('');
+  if (f && f.stackLines.length) {
+    lines.push('````text', ...f.stackLines.map(l => l.replace(/`{4,}/g, '```')), '````');
+    if (f.stackDropped) lines.push(`_… ${f.stackDropped} more line${f.stackDropped === 1 ? '' : 's'} of the stack trace in the report._`);
+    lines.push('');
+  }
+  return lines;
+}
+
 /** "**Class**<br>#method", as on the Slowest test card. */
 function testCell(it) {
   const cls = it.className || it.name || '?';
@@ -778,5 +825,5 @@ module.exports = {
   overviewOf, renderOverview,
   machineCpuSummary, prepareCpuSeries, machineMemorySeries, slowestTestOf, issueCoord,
   MAX_PROJECT_MODULES, MAX_BAR_ROWS, MAX_TIMELINE_ROWS, MAX_ISSUES, MAX_WARNINGS, MAX_LABEL, MAX_MESSAGE, MAX_FAILED_TESTS, MAX_SLOWEST_TESTS,
-  GANTT_INIT,
+  MAX_STACK_LINES, MAX_STACK_LINE, GANTT_INIT,
 };

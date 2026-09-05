@@ -834,6 +834,10 @@ test('the Overview in the job summary mirrors the dashboard: cards, project, mod
     exceptionType: 'org.apache.maven.plugin.MojoFailureException', message: 'There are test failures.\n\nPlease refer to target/surefire-reports',
   }];
   model.warnings = ['Fork JVM lib-b: recording truncated | see the log'];
+  model.failedTests = [{
+    name: 'liba.LibATest#fails', className: 'liba.LibATest', methodName: 'fails', durationMs: 7, framework: 'JUNIT5', module: 'org.mvnlens.it:lib-a:1.0-SNAPSHOT', status: 'FAILED',
+    failure: { exceptionType: 'java.lang.AssertionError', message: 'boom', stackTrace: 'java.lang.AssertionError: boom\n\tat liba.LibATest.fails(LibATest.java:9)' },
+  }];
   const ws = workspace(model);
   const { res, summary } = await runReport(fake, ws.dir);
   assert.equal(res.exitCode, 0);
@@ -852,7 +856,7 @@ test('the Overview in the job summary mirrors the dashboard: cards, project, mod
   assert.ok(md.includes('<details open>\n<summary><b>Issues</b> · 1 issue</summary>\n\n**1 issue recorded** · 1 error\n\n- ❌ **ERROR** · mojo · org.mvnlens.it:lib-a:1.0-SNAPSHOT org.apache.maven.plugins:maven-surefire-plugin:test @default-test (test) — There are test failures. Please refer to target/surefire-reports `org.apache.maven.plugin.MojoFailureException`'), md);
   assert.ok(md.includes('<details open>\n<summary><b>Warnings</b> · 1</summary>\n\n- Fork JVM lib-b: recording truncated \\| see the log'), md);
   const n = model.tests.junitPlatform.length;
-  assert.ok(md.includes(`<details open>\n<summary><b>Tests</b> · no failure · ${n} slowest</summary>\n\nNo failed test.\n\n**${n} slowest tests** · mvn-lens ranks up to 10 per test framework; failures are listed above in full, so a fast failing test is not here\n\n| # | Test | Module | Framework | Duration |\n|---:|---|---|---|---:|\n| 1 | **LibATest**<br>#name | lib-a | JUNIT5 | 133 ms |\n| 2 | **AppTest**<br>#describes | app | JUNIT5 | 128 ms |`), md);
+  assert.ok(md.includes(`<details open>\n<summary><b>Tests</b> · 1 failed · ${n} slowest</summary>\n\n**1 failed test** · every failure of the build, whatever its duration, with the exception, the message and the stack trace the test listener captured\n\n❌ **LibATest#fails** · lib-a · JUNIT5 · 7 ms · FAILED  \n\`java.lang.AssertionError\`: boom\n\n\`\`\`\`text\njava.lang.AssertionError: boom\n    at liba.LibATest.fails(LibATest.java:9)\n\`\`\`\`\n\n**${n} slowest tests** · mvn-lens ranks up to 10 per test framework; failures are listed above in full, so a fast failing test is not here\n\n| # | Test | Module | Framework | Duration |\n|---:|---|---|---|---:|\n| 1 | **LibATest**<br>#name | lib-a | JUNIT5 | 133 ms |\n| 2 | **AppTest**<br>#describes | app | JUNIT5 | 128 ms |`), md);
   // The monitoring note opens the summary: it is what a reader of the run page needs first.
   assert.ok(md.startsWith(`## 🔎 To go further: a more in-depth report, available a few minutes after this summary\n\n- 📊 **[This report](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3)** — the full mvn-lens report of this Maven build: timeline, tests, CPU, memory, GC, JIT and flame graphs\n- 🏃 **[This run](${SITE}#/run/${RUN_ID})** — every Maven build of this workflow run\n- 📚 **[All mvn-lens reports](${SITE}#/reports)** — the history kept on the monitoring page\n\n**Monitoring page: [${SITE}](${SITE})**  \n_This summary was written as the build ended; the Build monitor workflow processes the run once it completes, then GitHub Pages publishes the page — a few minutes later._\n\n### mvn-lens report — `), md.slice(0, 700));
   assert.ok(md.indexOf('_This summary was written as the build ended;') < md.indexOf('\n### mvn-lens report — '), md.slice(0, 600));

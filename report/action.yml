@@ -60,9 +60,10 @@ inputs:
       available a few minutes after the summary), then the Overview page of the
       mvn-lens report — duration, CPU, threads,
       Surefire JVMs, slowest goal and test, GC pause, C2 compile time, then
-      issues, warnings, the failed and slowest tests, project, build timeline
-      (a Mermaid Gantt chart) with the machine's CPU and memory usage, module
-      wall times and lifecycle phase times. "brief": one line of headline
+      issues, warnings, the failed tests (exception, message, stack trace) and
+      the slowest tests, project, build timeline (a Mermaid Gantt chart) with
+      the machine's CPU and memory usage, module wall times and lifecycle phase
+      times. "brief": one line of headline
       numbers and the same links and note. "none": nothing.
     required: false
     default: overview

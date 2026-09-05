@@ -375,11 +375,20 @@ test('overviewOf / renderOverview: the Tests section lists every failed test (mo
       testng: [t('c.NgTest#slow', 5000, { framework: 'TESTNG', module: 'g:web:1' }), t('c.NgTest#fast', 5)],
       junit4: [t('d.OldTest#legacy', 0, { durationMaxMs: 950, framework: 'JUNIT4' })],   // no durationMs: the longest invocation, as the dashboard ranks it
     },
-    failedTests: [t('a.b.Jupiter_Test#broken', 12, { status: 'FAILED' }), t('c.NgTest#errored', 3, { framework: 'TESTNG', status: 'ERRORED', module: 'g:web:1' })],
+    failedTests: [
+      // TestEntry.failure as mvn-lens writes it (PR #26): the throwable's class, message and printed stack trace.
+      t('a.b.Jupiter_Test#broken', 12, { status: 'FAILED', failure: { exceptionType: 'org.opentest4j.AssertionFailedError', message: 'expected: <1> but was: <2>', stackTrace: 'org.opentest4j.AssertionFailedError: expected: <1> but was: <2>\n\tat a.b.Jupiter_Test.broken(Jupiter_Test.java:21)\n\tat java.base/java.lang.reflect.Method.invoke(Method.java:565)\n' } }),
+      // JUnit Platform's own events carry the exception class alone.
+      t('c.NgTest#errored', 3, { framework: 'TESTNG', status: 'ERRORED', module: 'g:web:1', failure: { exceptionType: 'java.lang.IllegalStateException', message: null, stackTrace: null } }),
+    ],
   };
   const o = overviewOf(model).tests;
   assert.equal(o.failed.count, 2);
-  assert.deepEqual(o.failed.items[0], { name: 'a.b.Jupiter_Test#broken', className: 'Jupiter_Test', method: 'broken', module: 'core', framework: 'JUNIT5', durationMs: 12, status: 'FAILED' });
+  assert.deepEqual(o.failed.items[0], {
+    name: 'a.b.Jupiter_Test#broken', className: 'Jupiter_Test', method: 'broken', module: 'core', framework: 'JUNIT5', durationMs: 12, status: 'FAILED',
+    failure: { exceptionType: 'org.opentest4j.AssertionFailedError', message: 'expected: <1> but was: <2>', stackLines: ['org.opentest4j.AssertionFailedError: expected: <1> but was: <2>', '    at a.b.Jupiter_Test.broken(Jupiter_Test.java:21)', '    at java.base/java.lang.reflect.Method.invoke(Method.java:565)'], stackDropped: 0 },
+  });
+  assert.deepEqual(o.failed.items[1].failure, { exceptionType: 'java.lang.IllegalStateException', message: null, stackLines: [], stackDropped: 0 });
   assert.equal(o.slowest.ranked, 13);
   assert.deepEqual(o.slowest.items.map(i => `${i.className}#${i.method} ${i.durationMs}`), [
     'NgTest#slow 5000', 'Jupiter_Test#case_0 1000', 'Jupiter_Test#case_1 990', 'Jupiter_Test#case_2 980', 'Jupiter_Test#case_3 970',
@@ -387,7 +396,14 @@ test('overviewOf / renderOverview: the Tests section lists every failed test (mo
   ]);
 
   const md = renderOverview(overviewOf(model));
-  assert.ok(md.includes('<details open>\n<summary><b>Tests</b> · 2 failed · 10 slowest</summary>\n\n**2 failed tests** · every failure of the build, whatever its duration\n\n| Test | Module | Framework | Duration | Status |\n|---|---|---|---:|---|\n| **Jupiter\\_Test**<br>#broken | core | JUNIT5 | 12 ms | ❌ FAILED |\n| **NgTest**<br>#errored | web | TESTNG | 3 ms | ❌ ERRORED |\n\n**10 slowest tests** · mvn-lens ranks up to 10 per test framework; failures are listed above in full, so a fast failing test is not here\n\n| # | Test | Module | Framework | Duration |\n|---:|---|---|---|---:|\n| 1 | **NgTest**<br>#slow | web | TESTNG | 5.0 s |\n| 2 | **Jupiter\\_Test**<br>#case\\_0 | core | JUNIT5 | 1.0 s |\n'), md);
+  // Each failure as a row of the dashboard's failed-tests list, its headline ("type: message"), then the stack trace in a code block.
+  assert.ok(md.includes('<details open>\n<summary><b>Tests</b> · 2 failed · 10 slowest</summary>\n\n**2 failed tests** · every failure of the build, whatever its duration, with the exception, the message and the stack trace the test listener captured\n\n'
+    + '❌ **Jupiter\\_Test#broken** · core · JUNIT5 · 12 ms · FAILED  \n`org.opentest4j.AssertionFailedError`: expected: \\<1\\> but was: \\<2\\>\n\n````text\norg.opentest4j.AssertionFailedError: expected: <1> but was: <2>\n    at a.b.Jupiter_Test.broken(Jupiter_Test.java:21)\n    at java.base/java.lang.reflect.Method.invoke(Method.java:565)\n````\n\n'
+    + '❌ **NgTest#errored** · web · TESTNG · 3 ms · ERRORED  \n`java.lang.IllegalStateException`\n\n'
+    + '**10 slowest tests** · mvn-lens ranks up to 10 per test framework; failures are listed above in full, so a fast failing test is not here\n\n| # | Test | Module | Framework | Duration |\n|---:|---|---|---|---:|\n| 1 | **NgTest**<br>#slow | web | TESTNG | 5.0 s |\n| 2 | **Jupiter\\_Test**<br>#case\\_0 | core | JUNIT5 | 1.0 s |\n'), md);
+  // A failed test without details (a report written before mvn-lens recorded them): the row alone.
+  const plain = renderOverview(overviewOf({ failedTests: [t('x.T#plain', 4, { status: 'FAILED' })] }));
+  assert.ok(plain.includes('\n❌ **T#plain** · core · JUNIT5 · 4 ms · FAILED\n\n') && !plain.includes('````'), 'no headline, no code block: ' + plain);
 
   // Reports written before model.failedTests existed: the failures among the ranked tests, by the dashboard's substring rule.
   const old = overviewOf({ tests: { junit4: [t('x.T#a', 1, { status: 'FAILURE' }), t('x.T#b', 2, { outcome: 'ERROR', status: undefined }), t('x.T#c', 3)] } }).tests;
@@ -397,7 +413,20 @@ test('overviewOf / renderOverview: the Tests section lists every failed test (mo
   const many = overviewOf({ failedTests: Array.from({ length: 60 }, (_, i) => t(`x.T#f${i}`, 1, { status: 'FAILED' })) });
   assert.equal(many.tests.failed.items.length, ov.MAX_FAILED_TESTS);
   const manyMd = renderOverview(many);
-  assert.ok(manyMd.includes('<summary><b>Tests</b> · 60 failed</summary>') && manyMd.includes('| … 10 more |  |  |  |  |'), manyMd);
+  assert.ok(manyMd.includes('<summary><b>Tests</b> · 60 failed</summary>') && manyMd.includes('\n… 10 more failed tests: the report lists them all.\n'), manyMd);
+  // The stack trace is cut to MAX_STACK_LINES lines of MAX_STACK_LINE characters, the message to one line; a line of four
+  // backticks in the trace is reduced to three so it cannot close the four-backtick fence.
+  const trace = Array.from({ length: 40 }, (_, i) => (i === 3 ? '````' : `\tat frame${i}(${'x'.repeat(400)})`)).join('\n');
+  const cut = overviewOf({ failedTests: [t('x.T#f', 1, { status: 'FAILED', failure: { exceptionType: 'E', message: 'first\n  second', stackTrace: trace } })] });
+  const cf = cut.tests.failed.items[0].failure;
+  assert.equal(cf.message, 'first second');
+  assert.equal(cf.stackLines.length, ov.MAX_STACK_LINES);
+  assert.equal(cf.stackDropped, 10);
+  assert.equal(cf.stackLines[0].length, ov.MAX_STACK_LINE);
+  assert.ok(cf.stackLines[0].startsWith('    at frame0(xxx') && cf.stackLines[0].endsWith('…'), cf.stackLines[0]);
+  const cutMd = renderOverview(cut);
+  assert.ok(cutMd.includes('\n````text\n    at frame0(') && cutMd.includes('\n```\n    at frame4(') && cutMd.includes('\n````\n_… 10 more lines of the stack trace in the report._\n'), cutMd);
+  assert.equal((cutMd.match(/^````$/gm) || []).length, 1, 'one closing fence, at the end of the trace');
   assert.ok(renderOverview(overviewOf({})).includes('<details open>\n<summary><b>Tests</b></summary>\n\nNo test data.\n\n</details>'));
 });
 
