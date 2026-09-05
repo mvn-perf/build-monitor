@@ -135,7 +135,7 @@ test('run link, one row per job, viewer + step links, the summary job as "this j
     `| Javadoc | ❌ failure | 2m 24s | 8.0 s · OK | [report](${viewer('j7702-s4')}) · ${stepLink(JAVADOC, 4)} |`,
     '| Monitoring | ⏳ this job | — | — | — |',
   ]);
-  assert.ok(md.includes(`_Refreshed by [Build monitor ↗](https://github.com/${REPO}/actions/workflows/build-monitor.yml) once this run completes; GitHub Pages may need a few minutes to publish._`), md);
+  assert.ok(md.includes(`🔎 _To go further: the more in-depth mvn-lens report of every Maven build above will be on the monitoring page ([${SITE}](${SITE})) a few minutes after this summary: [Build monitor ↗](https://github.com/${REPO}/actions/workflows/build-monitor.yml) processes this run once it completes, then GitHub Pages publishes the page._`), md);
   assert.ok(!md.includes('No mvn-lens report'), md);
   assert.ok(!md.includes('⚠️'), md);
   assert.ok(!md.includes(TOKEN), 'the token must never reach the summary');
@@ -171,6 +171,7 @@ test('no inbox ref: the jobs table plus the "no report" note; reports-count 0', 
     '| Monitoring | ⏳ this job | — | — | — |',
   ]);
   assert.ok(md.includes('\nNo mvn-lens report was published for this run.\n'), md);
+  assert.ok(!md.includes('To go further'), 'no "a few minutes after this summary" promise when nothing was published: ' + md);
   assert.ok(!md.includes('⚠️'), md);
   assert.deepEqual(r.outputs, { 'monitor-url': `${SITE}#/run/${RUN_ID}`, 'reports-count': '0' });
 });
@@ -343,6 +344,7 @@ test('inbox ref unreadable: warning, jobs table still written', async () => {
   assert.match(r.summary, /> ⚠️ could not read the inbox ref heads\/build-monitor-inbox\/777 \(.*Resource not accessible by integration.*\); does the job grant "contents: read"\?/);
   assert.equal(tableRows(r.summary).length, 3);
   assert.ok(!r.summary.includes('No mvn-lens report was published'), 'unknown is not "none"');
+  assert.ok(r.summary.includes(`🔎 _To go further: any mvn-lens report published by the Maven jobs of this run will be on the monitoring page ([${SITE}](${SITE})) a few minutes after this summary:`), 'the promise is hedged when the inbox could not be read: ' + r.summary);
   assert.equal(r.outputs['reports-count'], '0');
 });
 
@@ -371,7 +373,7 @@ test('outside GitHub Actions: heading + warning, empty monitor-url, exit 0', asy
   assert.equal(r.result.exitCode, 0);
   assert.match(r.summary, /^## Build monitoring\n\n_The monitoring page URL is unknown: set the `site-url` input\._\n/);
   assert.match(r.summary, /> ⚠️ GITHUB\\_REPOSITORY \/ GITHUB\\_RUN\\_ID are not set/, 'problem texts are escaped too (they embed API messages)');
-  assert.ok(r.summary.includes('_Refreshed by the Build monitor workflow once this run completes'), r.summary);
+  assert.ok(r.summary.includes('will be on the monitoring page a few minutes after this summary: the Build monitor workflow processes this run once it completes'), r.summary);
   assert.deepEqual(r.outputs, { 'monitor-url': '', 'reports-count': '0' });
   assert.equal(fake.calls.length, 0);
 });
@@ -385,9 +387,9 @@ test('renderSummary: pure rendering of a minimal state', () => {
     '',
     'The inbox of this run holds no mvn-lens report.',
     '',
-    '_Refreshed by the Build monitor workflow once this run completes; GitHub Pages may need a few minutes to publish._',
-    '',
   ].join('\n'));
+  const one = summary.renderSummary({ title: 'T', urls: { site: SITE, run: `${SITE}#/run/1`, reports: `${SITE}#/reports`, builds: `${SITE}#/builds` }, runId: 1, runUrl: null, jobs: [], entries: [{ key: 'j1-s2', how: 'key', job: null, meta: null }], thisJobId: null, inboxPresent: true, problems: [], workflowUrl: null });
+  assert.ok(one.endsWith(`\n\n🔎 _To go further: the more in-depth mvn-lens report of every Maven build above will be on the monitoring page ([${SITE}](${SITE})) a few minutes after this summary: the Build monitor workflow processes this run once it completes, then GitHub Pages publishes the page._\n`), one);
 });
 
 test('summary/index.js runs as a child process against the fake served over HTTP', async () => {

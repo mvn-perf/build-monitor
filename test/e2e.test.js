@@ -248,7 +248,9 @@ test('report (two jobs) → summary (final job) → build-monitor (workflow_run)
     assert.equal(javaReport.out['report-url'], viewer(javaKey));
     assert.equal(javaReport.out['maven-total-ms'], String(javaModel.session.totalMs));
     assert.equal(javaReport.out['commit-sha'], fake.store.headOf(INBOX));
-    assert.ok(javaReport.summary.includes(`[report](${viewer(javaKey)})`) && javaReport.summary.includes(`[monitoring](${SITE}#/run/${RUN_ID})`), javaReport.summary);
+    assert.match(javaReport.summary, /^## 🔎 To go further: a more in-depth report, available a few minutes after this summary\r?\n\r?\n- 📊 \*\*\[This report\]\(https:\/\//, 'the way to go further opens the job summary');
+    assert.match(javaReport.summary, /\n### mvn-lens report — Java 25 \(ubuntu-latest\) › Build with Maven\r?\n\r?\n\*\*Duration /, 'then the Overview of the report');
+    assert.ok(javaReport.summary.includes(`- 📊 **[This report](${viewer(javaKey)})** — the full mvn-lens report`) && javaReport.summary.includes(`- 🏃 **[This run](${SITE}#/run/${RUN_ID})**`) && javaReport.summary.includes(`**Monitoring page: [${SITE}](${SITE})**`), javaReport.summary);
 
     const html = fake.store.readFile(INBOX, `reports/${RUN_ID}/${javaKey}/report.html`);
     assert.ok(html, 'report.html is in the inbox');

@@ -37,6 +37,8 @@ const ARROW = '↗';
 const DOT = '·';
 const DASH = '—';
 const HOURGLASS = '⏳';
+/** "To go further": the in-depth reports, a few minutes after this summary. */
+const FURTHER = '🔎';
 const WARN = '⚠️';
 
 /** Result cell per job conclusion (jobs that are not completed get the hourglass). */
@@ -301,10 +303,19 @@ function renderSummary(s) {
   if (s.inboxPresent === false) lines.push('No mvn-lens report was published for this run.', '');
   else if (s.inboxPresent === true && !(s.entries || []).length) lines.push('The inbox of this run holds no mvn-lens report.', '');
 
-  lines.push(s.workflowUrl
-    ? `_Refreshed by [Build monitor ${ARROW}](${s.workflowUrl}) once this run completes; GitHub Pages may need a few minutes to publish._`
-    : '_Refreshed by the Build monitor workflow once this run completes; GitHub Pages may need a few minutes to publish._');
-  return lines.join('\n') + '\n';
+  // The same promise every report step made in its own job summary: the full
+  // reports reach the monitoring page a few minutes after the run completes.
+  // Not when the summary just said no report was published; hedged when the
+  // inbox could not be read (the reports may well be there).
+  const entries = Array.isArray(s.entries) ? s.entries : [];
+  const none = s.inboxPresent === false || (s.inboxPresent === true && !entries.length);
+  if (!none) {
+    const site = urls.site ? ` ([${urls.site}](${urls.site}))` : '';
+    const processor = s.workflowUrl ? `[Build monitor ${ARROW}](${s.workflowUrl})` : 'the Build monitor workflow';
+    const what = entries.length ? 'the more in-depth mvn-lens report of every Maven build above' : 'any mvn-lens report published by the Maven jobs of this run';
+    lines.push(`${FURTHER} _To go further: ${what} will be on the monitoring page${site} a few minutes after this summary: ${processor} processes this run once it completes, then GitHub Pages publishes the page._`);
+  }
+  return lines.join('\n').replace(/\n+$/, '') + '\n';
 }
 
 function tableRows(s) {
