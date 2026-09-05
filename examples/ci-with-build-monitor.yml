@@ -59,6 +59,9 @@ jobs:
       # belongs to is detected automatically (the one that was running when the
       # report was written); pass `step-name:` to override. Jobs with a custom
       # `name:` pass it as `job-name:` so the step identifies itself unambiguously.
+      # The step also writes the Overview page of the report (duration, CPU, slowest
+      # goal and test, module and phase times, issues…) into this job's summary,
+      # with the monitoring page where the full report lands a few minutes later.
       - name: Publish mvn-lens report
         if: ${{ !cancelled() }}
         uses: mvn-perf/build-monitor/report@main
@@ -67,6 +70,7 @@ jobs:
           job-name: Java ${{ matrix.java }} (${{ matrix.os }})
           # step-name: Build with Maven
           # label: ${{ matrix.os }}          # only needed to split several Maven runs of ONE step
+          # job-summary: brief               # overview (default) · brief (one line of numbers and the links) · none
 
   javadoc:
     name: Javadoc

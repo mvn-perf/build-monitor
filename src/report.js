@@ -10,9 +10,12 @@
  *   reports/<runId>/<key>/report.html   (+ report-2.html … for extra matches)
  *   reports/<runId>/<key>/meta.json     (attribution + Maven summary)
  * to the run's inbox ref (refs/heads/<inbox-prefix><runId>) through the Git
- * Data API — no artifact, no git binary, no checkout. The summary action reads
- * the inbox back into the run summary; the processor grafts it into the site
- * branch. Derived from mvn-perf/build-dashboard (mvn-lens/attach.js).
+ * Data API — no artifact, no git binary, no checkout. It also writes the
+ * Overview of the report (src/overview.js) to the job summary, headed by the
+ * way to go further: the monitoring page, where the in-depth report will be
+ * a few minutes after the summary. The summary action
+ * reads the inbox back into the run summary; the processor grafts it into the
+ * site branch. Derived from mvn-perf/build-dashboard (mvn-lens/attach.js).
  */
 'use strict';
 
@@ -22,9 +25,10 @@ const crypto = require('crypto');
 const util = require('./util');
 const { GitHubApi } = require('./github-api');
 const { GitStore, GitStoreError } = require('./gitstore');
-const { readReportSummary, compressReportHtml, splitReportHtml } = require('./mvnlens');
+const { readReportModel, summarizeModel, compressReportHtml, splitReportHtml } = require('./mvnlens');
+const { overviewOf, renderOverview } = require('./overview');
 const { locateJobAndStep } = require('./locate');
-const { githubContext, resolveSiteUrl, monitorUrls, inboxRef, DEFAULT_INBOX_PREFIX } = require('./context');
+const { githubContext, resolveSiteUrl, defaultSiteUrl, monitorUrls, inboxRef, DEFAULT_INBOX_PREFIX } = require('./context');
 const { isValidKey } = require('./history');
 
 const { log, warning, error, debug, getInput, getBooleanInput, parseList, setOutput, appendSummary, addMask, sanitizeName, toPosix, fmtMs, fmtBytes, escapeMd, isoNow } = util;
@@ -37,6 +41,15 @@ const DEFAULT_BUDGET_MS = 180000;
 const MAX_KEY_SUFFIX = 99;
 const PERMISSION_HINT = 'grant contents: write to this job (pull requests from forks have a read-only token)';
 const NO_FILES_MODES = ['warn', 'error', 'ignore'];
+/** What the step writes to the job summary (the `job-summary` input). */
+const SUMMARY_MODES = ['overview', 'brief', 'none'];
+/** GitHub drops a step summary above 1 MiB: the Overviews stop (the brief line takes over) well before that. */
+const MAX_SUMMARY_BYTES = 900 * 1024;
+const DASH = '—';
+const DOT = '·';
+/** "To go further": the in-depth report, a few minutes after this summary. */
+const FURTHER = '🔎';
+const WARN = '⚠️';
 /** Where an unexpected error (a bug in this action) should be reported. */
 const ISSUES_URL = 'https://github.com/mvn-perf/build-monitor/issues';
 
@@ -48,8 +61,12 @@ function readInputs() {
   const rawMode = (getInput('if-no-files-found', { default: 'warn' }) || 'warn').toLowerCase();
   const ifNoFiles = NO_FILES_MODES.includes(rawMode) ? rawMode : 'warn';
   if (ifNoFiles !== rawMode) warning(`build-monitor: if-no-files-found "${rawMode}" is not one of ${NO_FILES_MODES.join(', ')}; using warn`);
+  const rawSummary = (getInput('job-summary', { default: 'overview' }) || 'overview').toLowerCase();
+  const jobSummary = SUMMARY_MODES.includes(rawSummary) ? rawSummary : 'overview';
+  if (jobSummary !== rawSummary) warning(`build-monitor: job-summary "${rawSummary}" is not one of ${SUMMARY_MODES.join(', ')}; using overview`);
   const patterns = parseList(getInput('report', { default: DEFAULT_REPORT }));
   return {
+    jobSummary,
     patterns: patterns.length ? patterns : [DEFAULT_REPORT],
     stepName: getInput('step-name') || null,
     jobName: getInput('job-name') || null,
@@ -123,6 +140,10 @@ async function publish(inputs, r, o) {
   r.stepName = inputs.stepName;
   r.where = whereOf(null, inputs, ctx);
   logMaven(reports[0]);
+  // The monitoring links come first: the job summary carries them whether or
+  // not the report gets published (they are refined below, once the Pages URL
+  // and the key are known).
+  r.urls = monitorUrls(inputs.siteUrl || defaultSiteUrl(ctx), ctx.runId);
 
   // ---- 2. Can this run publish at all? ----------------------------------------
   if (!ctx.repository || !ctx.runId) {
@@ -211,7 +232,11 @@ function findReports(patterns) {
  * Reads the matched files: only files that embed an mvn-lens model are kept
  * (the report HTML ends up on the Pages origin, so nothing else is published).
  * Each entry: { file, name ('report.html', 'report-2.html'…), content (Buffer),
- * sha, bytes, mtimeMs, summary, source, compressed, assets, originalPath, label }.
+ * sha, bytes, mtimeMs, summary, overview, source, compressed, assets,
+ * originalPath, label }. `summary` is what meta.json and the history keep;
+ * `overview` is what the job summary shows (src/overview.js) — computed here,
+ * while the model is parsed, and never fatal: a build's monitoring data is
+ * worth more than its summary block.
  *
  * The file on disk is never touched: the self-contained report stays the CI
  * artifact, only the published copy is re-encoded and split.
@@ -220,10 +245,17 @@ function readReports(files, compress) {
   const reports = [];
   const cwd = process.cwd();
   for (const file of files) {
-    const { summary, source, error: err } = readReportSummary(file);
-    if (!summary || source !== 'html') {
+    const { model, source, error: err } = readReportModel(file);
+    if (!model || source !== 'html') {
       warning(`build-monitor: ${file}: ${err || 'no embedded mvn-lens model'}; not published`);
       continue;
+    }
+    const summary = summarizeModel(model);
+    let overview = null;
+    try {
+      overview = overviewOf(model);
+    } catch (e) {
+      warning(`build-monitor: ${file}: could not build the Overview for the job summary (${e && e.message ? e.message : e}); the summary shows the headline numbers only`);
     }
     let content = fs.readFileSync(file);
     let compressed = false;
@@ -260,7 +292,7 @@ function readReports(files, compress) {
     const rel = path.relative(cwd, file);
     reports.push({
       file, name: null, content, sha: GitStore.blobSha(content), bytes: content.length, mtimeMs,
-      summary, source, compressed, assets,
+      summary, overview, source, compressed, assets,
       originalPath: toPosix(!rel || rel.startsWith('..') || path.isAbsolute(rel) ? file : rel),
       label: null,
     });
@@ -515,22 +547,61 @@ function finish(r, inputs, failure) {
     reason: r.published ? '' : (r.reason || ''),
   };
   for (const [k, v] of Object.entries(outputs)) setOutput(k, v);
-  if (r.found) appendSummary(renderSummary(r));
+  const mode = inputs ? inputs.jobSummary : 'overview';
+  if (r.found && mode !== 'none') appendSummary(renderSummary(r, mode));
   return { exitCode, outputs };
 }
 
-/** The one-line job summary block (heading + stats/links or the reason). */
-function renderSummary(r) {
+/**
+ * The job summary block of this step. Mode 'overview' (the default): first
+ * the way to go further — the monitoring page, where the in-depth report will
+ * be a few minutes after this summary — or why this report will not get
+ * there; then one heading per report with the
+ * Overview of the mvn-lens dashboard (the duration, the stat cards, then the
+ * Issues, Warnings, Tests, Project, "Build timeline, CPU and memory usage",
+ * Module wall time and Lifecycle phase time sections). Mode 'brief': the one-line
+ * stats block. GitHub drops a step summary above 1 MiB, so a report whose
+ * Overview would take the summary past MAX_SUMMARY_BYTES gets the brief line
+ * instead (with reports of similar size that is every report after the cut).
+ */
+function renderSummary(r, mode) {
+  if (mode !== 'overview') return briefSummary(r);
+  const note = monitoringNote(r);
+  const parts = [note];
+  let bytes = Buffer.byteLength(note, 'utf8');
+  for (const rep of r.reports) {
+    const heading = `### mvn-lens report ${DASH} ${escapeMd(r.where || 'unknown job')}${rep.label ? ` ${DOT} ${escapeMd(rep.label)}` : ''}`;
+    let body = rep.overview ? renderOverview(rep.overview) : null;
+    if (body && bytes + Buffer.byteLength(body, 'utf8') > MAX_SUMMARY_BYTES) {
+      debug(`build-monitor: the job summary is ${fmtBytes(bytes)} already; ${rep.name} gets the brief line instead of its Overview`);
+      body = null;
+    }
+    if (!body) body = statsSegments(rep.summary).join(` ${DOT} `) + '\n';
+    const block = `${heading}\n\n${body}`;
+    bytes += Buffer.byteLength(block, 'utf8');
+    parts.push(block);
+  }
+  return parts.join('\n');
+}
+
+/**
+ * The one-line block of `job-summary: brief`: heading + stats, then the same
+ * promise as the Overview mode (the in-depth report and the monitoring page,
+ * a few minutes after the run) or the reason nothing was published.
+ */
+function briefSummary(r) {
   const n = r.reports.length;
   const segs = statsSegments(r.summary);
   if (n > 1) segs.push(`${n} reports`);
   if (r.published) {
-    if (r.urls && r.urls.report) segs.push(`[report](${r.urls.report})`);
-    if (r.urls && r.urls.run) segs.push(`[monitoring](${r.urls.run})`);
+    const links = [];
+    if (r.urls && r.urls.report) links.push(`[in-depth report${n > 1 ? 's' : ''}](${r.urls.report})`);
+    if (r.urls && r.urls.run) links.push(`[monitoring](${r.urls.run})`);
+    segs.push(links.length ? `${FURTHER} to go further, a few minutes after this summary: ${links.join(` ${DOT} `)}` : `${FURTHER} to go further: in-depth report${n > 1 ? 's' : ''} on the monitoring page a few minutes after this summary`);
   } else {
     segs.push(`not published: ${escapeMd(r.reason || 'unknown reason')}`);
   }
-  return `#### mvn-lens report${n > 1 ? 's' : ''} — ${escapeMd(r.where || 'unknown job')}\n${segs.join(' · ')}`;
+  return `### mvn-lens report${n > 1 ? 's' : ''} ${DASH} ${escapeMd(r.where || 'unknown job')}\n${segs.join(` ${DOT} `)}`;
 }
 
 function statsSegments(s) {
@@ -541,7 +612,43 @@ function statsSegments(s) {
   return segs;
 }
 
+/**
+ * The opening block of the Overview summary: where the full report will be,
+ * as a heading (it is what a reader of the run page needs first) with one
+ * bold link per line, the monitoring page URL itself spelled out, and the
+ * note that it takes a few minutes (the Build monitor workflow processes the
+ * run once it completes, then GitHub Pages publishes) — or why this report
+ * will not get there.
+ */
+function monitoringNote(r) {
+  const urls = r.urls || {};
+  const site = urls.site ? `[${urls.site}](${urls.site})` : null;
+  const several = r.reports.length > 1;
+  if (r.published) {
+    const links = [];
+    if (urls.report) links.push(`- 📊 **[${several ? 'These reports' : 'This report'}](${urls.report})** ${DASH} the full mvn-lens ${several ? 'reports' : 'report'} of this Maven build: timeline, tests, CPU, memory, GC, JIT and flame graphs`);
+    if (urls.run) links.push(`- 🏃 **[This run](${urls.run})** ${DASH} every Maven build of this workflow run`);
+    if (urls.reports) links.push(`- 📚 **[All mvn-lens reports](${urls.reports})** ${DASH} the history kept on the monitoring page`);
+    return [
+      `## ${FURTHER} To go further: ${several ? 'more in-depth reports' : 'a more in-depth report'}, available a few minutes after this summary`,
+      '',
+      ...(links.length ? [...links, ''] : []),
+      site ? `**Monitoring page: ${site}**  ` : `**Monitoring page: URL unknown** ${DASH} set the \`site-url\` input  `,
+      `_This summary was written as the build ended; the Build monitor workflow processes the run once it completes, then GitHub Pages publishes the page ${DASH} a few minutes later._`,
+      '',
+    ].join('\n');
+  }
+  const why = escapeMd(r.reason || 'unknown reason');
+  return [
+    `## ${WARN} ${several ? 'These reports were' : 'This report was'} not published`,
+    '',
+    `**Reason:** ${why}.  `,
+    `${several ? 'They' : 'It'} will not appear on the monitoring page${site ? ` ${site}` : ''}.`,
+    '',
+  ].join('\n');
+}
+
 module.exports = {
   run, readInputs, findReports, readReports, reportLabels, keyFor, chooseKey, buildMeta, describeFailure, finish, renderSummary,
-  DEFAULT_BUDGET_MS, PERMISSION_HINT, ISSUES_URL,
+  DEFAULT_BUDGET_MS, PERMISSION_HINT, ISSUES_URL, MAX_SUMMARY_BYTES, SUMMARY_MODES,
 };

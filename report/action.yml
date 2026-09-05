@@ -2,7 +2,8 @@ name: 'Publish mvn-lens report (build-monitor)'
 description: >-
   Publishes the mvn-lens report of the preceding Maven step to this run's
   build-monitor inbox (a git ref, no artifact), attributed to the exact job and
-  step, so the Build monitor page can show it and link the GitHub step.
+  step, so the Build monitor page can show it and link the GitHub step; writes
+  the report's Overview and the monitoring link to the job summary.
 author: mvn-perf
 branding:
   icon: activity
@@ -52,6 +53,19 @@ inputs:
       repository's GitHub Pages URL (https://<owner>.github.io/<repo>/).
     required: false
     default: ''
+  job-summary:
+    description: >-
+      What this step writes to the job summary. "overview" (default): first the
+      way to go further (the monitoring page, where the in-depth report will be
+      available a few minutes after the summary), then the Overview page of the
+      mvn-lens report — duration, CPU, threads,
+      Surefire JVMs, slowest goal and test, GC pause, C2 compile time, then
+      issues, warnings, the failed and slowest tests, project, build timeline
+      (a Mermaid Gantt chart) with the machine's CPU and memory usage, module
+      wall times and lifecycle phase times. "brief": one line of headline
+      numbers and the same links and note. "none": nothing.
+    required: false
+    default: overview
   compress:
     description: >-
       Losslessly re-encode the report's embedded model as gzip+base64 (the

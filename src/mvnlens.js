@@ -120,31 +120,41 @@ function summarizeModel(model, opts) {
 }
 
 /**
- * Reads an mvn-lens report from disk and returns its summary. Prefers the HTML
- * (the file that gets published) and falls back to a sibling model.json.
- * @returns {{summary: object|null, source: string|null, error: string|null}}
+ * Reads the model of an mvn-lens report from disk. Prefers the HTML (the file
+ * that gets published) and falls back to a sibling model.json.
+ * @returns {{model: object|null, source: string|null, error: string|null}}
  */
-function readReportSummary(htmlFile, opts) {
+function readReportModel(htmlFile) {
   try {
     const html = fs.readFileSync(htmlFile, 'utf8');
     const model = extractModelFromHtml(html);
-    if (model) return { summary: summarizeModel(model, opts), source: 'html', error: null };
+    if (model) return { model, source: 'html', error: null };
   } catch (e) {
     const sidecar = path.join(path.dirname(htmlFile), 'model.json');
     if (fs.existsSync(sidecar)) {
       try {
-        return { summary: summarizeModel(JSON.parse(fs.readFileSync(sidecar, 'utf8')), opts), source: 'model.json', error: null };
+        return { model: JSON.parse(fs.readFileSync(sidecar, 'utf8')), source: 'model.json', error: null };
       } catch (e2) {
-        return { summary: null, source: null, error: `report unreadable (${e.message}); model.json unreadable (${e2.message})` };
+        return { model: null, source: null, error: `report unreadable (${e.message}); model.json unreadable (${e2.message})` };
       }
     }
-    return { summary: null, source: null, error: e.message };
+    return { model: null, source: null, error: e.message };
   }
   const sidecar = path.join(path.dirname(htmlFile), 'model.json');
   if (fs.existsSync(sidecar)) {
-    try { return { summary: summarizeModel(JSON.parse(fs.readFileSync(sidecar, 'utf8')), opts), source: 'model.json', error: null }; } catch (e) { /* fall through */ }
+    try { return { model: JSON.parse(fs.readFileSync(sidecar, 'utf8')), source: 'model.json', error: null }; } catch (e) { /* fall through */ }
   }
-  return { summary: null, source: null, error: 'no embedded mvn-lens model found' };
+  return { model: null, source: null, error: 'no embedded mvn-lens model found' };
+}
+
+/**
+ * Reads an mvn-lens report from disk and returns its summary (readReportModel
+ * + summarizeModel).
+ * @returns {{summary: object|null, source: string|null, error: string|null}}
+ */
+function readReportSummary(htmlFile, opts) {
+  const { model, source, error } = readReportModel(htmlFile);
+  return { summary: model ? summarizeModel(model, opts) : null, source, error };
 }
 
 /**
@@ -338,4 +348,4 @@ function str(v) { return v === undefined || v === null ? null : String(v); }
 function sumBy(list, key) { let t = 0; for (const e of list) t += num(e && e[key]); return t; }
 function pick(obj, keys) { const o = {}; for (const k of keys) if (obj[k] !== undefined) o[k] = obj[k]; return o; }
 
-module.exports = { extractModelFromHtml, summarizeModel, readReportSummary, compressReportHtml, splitReportHtml, MAX_MODULES };
+module.exports = { extractModelFromHtml, summarizeModel, readReportModel, readReportSummary, compressReportHtml, splitReportHtml, MAX_MODULES };

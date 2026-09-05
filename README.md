@@ -4,8 +4,9 @@
 > Actions builds: every **[mvn-lens](https://github.com/mvn-perf/mvn-lens)
 > Maven build report** one click away from the GitHub step that produced it,
 > and the **builds themselves** — runs, jobs, steps, durations — over time.
-> Reports travel through git, **never as artifacts**, and each run links its
-> own monitoring page from the job summary the moment it finishes.
+> Reports travel through git, **never as artifacts**; every Maven job writes
+> the **Overview** of its report into its job summary the moment the build
+> ends, and each run links its own monitoring page from the run summary.
 
 Zero dependencies (plain Node ≥ 20, runs on the runner's Node 24), a static
 site on `gh-pages`, history that outlives GitHub's 90-day log retention.
@@ -18,10 +19,18 @@ site on `gh-pages`, history that outlives GitHub's 90-day log retention.
 | **Report viewer** (`#/report/<run>/<key>`) | The full mvn-lens report in a sandboxed iframe, under a context bar: workflow · #run · branch · job › step · Maven total & status · GitHub step ↗ · raw report. |
 | **Builds** (`#/builds`) | Run durations per workflow over time (points coloured by conclusion, click → run), a job selector switching to that job's duration **stacked by step**, and the runs table. |
 | **Run** (`#/run/<id>`) | One run: its reports table, then a Gantt timeline of jobs and steps with step ↗ links and mvn-lens chips. A run the processor has not seen yet shows a “waiting for the Build monitor workflow” page that refreshes itself. |
+| **Job summary** (GitHub, per Maven job) | The **Overview page** of the job's mvn-lens report the moment the build ends — before the monitoring page has it: duration, the stat cards (CPU share, threads, Surefire JVMs, slowest goal, GC pause, C2 compile, slowest test), then the **Issues**, **Warnings**, **Tests** (every failed test, then the ten slowest), **Project**, **Build timeline, CPU and memory usage**, **Module wall time** and **Lifecycle phase time** sections, all expanded (the build timeline is a Mermaid Gantt chart, which GitHub draws; the other charts become tables with text bars). It opens with the way to go further: the monitoring page URL, where the in-depth report will be a few minutes after the summary. |
 
-The job summary of every monitored run ends with
-**Open this run in the monitoring page ↗** and a per-job table (result,
-duration, Maven total, report links) — requirement number one.
+The job summary of every Maven job carries the **Overview page of its
+mvn-lens report** as soon as the build ends — the duration banner, the stat
+cards (CPU, threads, Surefire JVMs, slowest goal, GC pause, C2 compile,
+slowest test) and the Issues, Warnings, Tests (every failed test, then the
+ten slowest), Project, Build timeline, Module wall time and Lifecycle phase
+time sections (the timeline is a Mermaid Gantt chart, the other charts
+tables with text bars). The summary opens with the way to go further: the monitoring page URL, where
+the in-depth report will be available a few minutes later. The summary of the run
+ends with **Open this run in the monitoring page ↗** and a per-job table
+(result, duration, Maven total, report links) — requirement number one.
 
 ## Quick start
 
@@ -29,7 +38,8 @@ Three actions, one repository:
 
 - `mvn-perf/build-monitor/report` — in each Maven job, right after the Maven
   step: publishes `report.html` to this run's **inbox ref**
-  (`refs/heads/build-monitor-inbox/<run id>`).
+  (`refs/heads/build-monitor-inbox/<run id>`) and writes the report's
+  Overview + the monitoring link into the job summary.
 - `mvn-perf/build-monitor/summary` — final job of the run: writes the
   monitoring link + table into `$GITHUB_STEP_SUMMARY`.
 - `mvn-perf/build-monitor` — its own workflow, after the run completes:
@@ -239,6 +249,7 @@ summary action (final job)                       7. delete the grafted inbox ref
 | `github-token` | `${{ github.token }}` | Needs `contents: write` (inbox commit) and `actions: read` (job/step lookup). |
 | `inbox-prefix` | `build-monitor-inbox/` | Branch namespace of the inbox refs; must match the other two actions. |
 | `site-url` | derived | Overrides `https://<owner>.github.io/<repo>/` for the links this step prints. |
+| `job-summary` | `overview` | What the step writes to the job summary: `overview` — the way to go further (the monitoring page, where the in-depth report will be a few minutes after the summary) and the Overview page of the report (see [What you get](#what-you-get)); `brief` — one line of headline numbers and the same links and note; `none`. |
 | `compress` | `true` | Losslessly re-encode the report's embedded JSON as gzip+base64 (22.8 MB → 2.9 MB) and split out the shared dashboard shell (`assets/lens-<hash>.js\|.css`); skipped when the report is not built that way. |
 | `if-no-files-found` | `warn` | `warn`, `error` or `ignore` when no report exists. |
 | `fail-on-error` | `false` | Fail the step when publishing fails (default: warn, set outputs, exit 0 — publishing monitoring data should not break a build). |

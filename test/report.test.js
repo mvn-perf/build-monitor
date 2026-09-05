@@ -197,10 +197,13 @@ test('publishes the compressed report and meta.json to the run inbox ref; output
   assert.equal(out.reason, '');
   assert.deepEqual(res.outputs, out);
 
-  assert.match(summary, /^#### mvn-lens report — build › Build with Maven\n/);
-  assert.match(summary, /Maven `clean verify` · \*\*8\.0 s\*\* total · wall 7\.6 s · CPU 903 ms · OK/);
-  assert.ok(summary.includes(`[report](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3)`), summary);
-  assert.ok(summary.includes(`[monitoring](${SITE}#/run/${RUN_ID})`), summary);
+  assert.match(summary, /^## 🔎 To go further: a more in-depth report, available a few minutes after this summary\r?\n/, 'the way to go further opens the summary, as a heading');
+  assert.match(summary, /\n### mvn-lens report — build › Build with Maven\r?\n\r?\n\*\*Duration 8\.0 s\*\* · 7\.6 s after extensions init/);
+  assert.match(summary, /Maven `clean verify` · ✅ OK · org\.mvnlens\.it:it04-multi-module:1\.0-SNAPSHOT · Maven 3\.9\.16 · JDK 17\.0\.8\.1/);
+  assert.ok(summary.includes('| CPU | Threads | Surefire JVMs | Slowest goal | GC pause | C2 compile | Slowest test |'), summary);
+  assert.ok(summary.includes('<summary><b>Module wall time</b> · 5 modules</summary>'), summary);
+  assert.ok(summary.replace(/\r\n/g, '\n').includes(`- 📊 **[This report](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3)** — the full mvn-lens report of this Maven build: timeline, tests, CPU, memory, GC, JIT and flame graphs\n- 🏃 **[This run](${SITE}#/run/${RUN_ID})** — every Maven build of this workflow run\n- 📚 **[All mvn-lens reports](${SITE}#/reports)** — the history kept on the monitoring page\n\n**Monitoring page: [${SITE}](${SITE})**  \n`), summary);
+  assert.ok(summary.includes('_This summary was written as the build ended; the Build monitor workflow processes the run once it completes, then GitHub Pages publishes the page — a few minutes later._'), summary);
 
   const commit = fake.store.commit(head);
   assert.equal(commit.message, 'Add mvn-lens report: build › Build with Maven');
@@ -286,9 +289,12 @@ test('read-only token (fork pull request): warning with the permission hint, pub
   assert.equal(out['monitor-url'], `${SITE}#/run/${RUN_ID}`, 'the monitoring link is still printed');
   assert.match(stdout, /::warning::.*not published.*contents: write/);
   assert.ok(!stdout.includes('::error::'));
-  assert.match(summary, /^#### mvn-lens report — build › Build with Maven\n/);
-  assert.match(summary, /not published: the token cannot write/);
-  assert.ok(!summary.includes('[report]('), 'no viewer link for an unpublished report');
+  assert.match(summary, /^## ⚠️ This report was not published\r?\n/, 'the reason opens the summary, as a heading');
+  assert.match(summary, /\n### mvn-lens report — build › Build with Maven\r?\n/);
+  assert.match(summary, /\*\*Duration 8\.0 s\*\*/, 'the Overview is local data: written even when nothing was published');
+  assert.match(summary, /## ⚠️ This report was not published\r?\n\r?\n\*\*Reason:\*\* the token cannot write to the repository \(.*\); grant contents: write to this job \(pull requests from forks have a read-only token\)\. {2}\r?\nIt will not appear on the monitoring page \[https:\/\/acme\.github\.io\/widgets\/\]\(https:\/\/acme\.github\.io\/widgets\/\)\./);
+  assert.ok(!summary.includes('[this report]('), 'no viewer link for an unpublished report');
+  assert.ok(!summary.includes('To go further'), summary);
   assert.equal(fake.store.headOf(INBOX), null);
 
   const strict = await runReport(fake, ws.dir, { 'INPUT_FAIL-ON-ERROR': 'true' });
@@ -433,7 +439,7 @@ test('attribution: explicit job-name (+ step-name), runner name, and an unresolv
   assert.equal(meta.stepName, 'Build with Maven');
   assert.equal(meta.stepResolution, 'job-not-found');
   assert.match(lost.stdout, /::warning::.*could not identify this job/);
-  assert.match(lost.summary, /^#### mvn-lens report — Java \(25\) › Build with Maven\n/);
+  assert.match(lost.summary, /\n### mvn-lens report — Java \(25\) › Build with Maven\r?\n/);
   assert.equal(fake.store.commit(lost.out['commit-sha']).message, 'Add mvn-lens report: Java (25) › Build with Maven');
 });
 
@@ -499,8 +505,12 @@ test('several matches: report.html + report-2.html in one key with distinguishin
     ['report.html', 'core/target/mvnlens/report.html', 'core', 7975],
     ['report-2.html', 'web/target/mvnlens/report.html', 'web', 4242],
   ]);
-  assert.match(summary, /^#### mvn-lens reports — /);
-  assert.match(summary, /2 reports/);
+  assert.match(summary, /\n### mvn-lens report — build › Build with Maven · core\r?\n/);
+  assert.match(summary, /\n### mvn-lens report — build › Build with Maven · web\r?\n/);
+  assert.equal((summary.match(/\*\*Duration /g) || []).length, 2, 'one Overview per report');
+  assert.match(summary, /\*\*Duration 4\.2 s\*\*/, 'the second report has its own numbers');
+  assert.match(summary, /^## 🔎 To go further: more in-depth reports, available a few minutes after this summary\r?\n/, summary.slice(0, 200));
+  assert.ok(summary.includes(`- 📊 **[These reports](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3)** — the full mvn-lens reports of this Maven build`), summary);
 
   // Comma-separated list, same files → identical set, nothing new.
   const again = await runReport(fake, dir, { INPUT_REPORT: 'core/target/mvnlens/report.html, web/target/mvnlens/report.html' });
@@ -791,7 +801,7 @@ test('report/index.js runs as a process against fake.serve(): GITHUB_OUTPUT and 
     assert.equal(out['commit-sha'], fake.store.headOf(INBOX));
     assert.equal(out['report-url'], `${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3`);
     assert.match(String(inboxFile(fake, `reports/${RUN_ID}/j${JOB_ID}-s3/report.html`)), /gzip:/);
-    assert.match(cap.summary(), /#### mvn-lens report — build › Build with Maven/);
+    assert.match(cap.summary(), /### mvn-lens report — build › Build with Maven/);
     assert.ok(!ok.stdout.includes(TOKEN) && !ok.stderr.includes(TOKEN));
 
     cap.reset();
@@ -804,4 +814,133 @@ test('report/index.js runs as a process against fake.serve(): GITHUB_OUTPUT and 
   } finally {
     await close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Job summary: the Overview of the report and the monitoring note
+// ---------------------------------------------------------------------------
+
+const { summarizeModel } = require('../src/mvnlens');
+const { overviewOf, renderOverview, GANTT_INIT } = require('../src/overview');
+const reportAction = require('../src/report');
+const context = require('../src/context');
+
+test('the Overview in the job summary mirrors the dashboard: cards, project, module and phase times, timeline, GC, issues, warnings', async () => {
+  const fake = scenario();
+  const model = fixtureModel();
+  model.issues = [{
+    atMs: 1, severity: 'ERROR', source: 'mojo', moduleKey: 'org.mvnlens.it:lib-a:1.0-SNAPSHOT',
+    plugin: 'org.apache.maven.plugins:maven-surefire-plugin', goal: 'test', executionId: 'default-test', phase: 'test',
+    exceptionType: 'org.apache.maven.plugin.MojoFailureException', message: 'There are test failures.\n\nPlease refer to target/surefire-reports',
+  }];
+  model.warnings = ['Fork JVM lib-b: recording truncated | see the log'];
+  const ws = workspace(model);
+  const { res, summary } = await runReport(fake, ws.dir);
+  assert.equal(res.exitCode, 0);
+  const md = summary.replace(/\r\n/g, '\n');
+  assert.ok(md.includes('| **12% of machine**<br>903 ms machine-time · all JVMs | **1**<br>singlethreaded · sequential | **4**<br>across 4 modules | **test**<br>1.7 s | **0 ms**<br>17 events | **9.9 s**<br>45 compilations | **LibATest**<br>#name · 133 ms |'), md);
+  assert.ok(md.includes('<details open>\n<summary><b>Project</b> · 5 modules</summary>\n\norg.mvnlens.it:it04-multi-module:1.0-SNAPSHOT — 5 modules, packagings = 1 pom, 4 jar. Listed in reactor build order.\n\n1. IT04: Muti-module `pom`\n2. Library A `jar`'), md);
+  assert.ok(md.includes('<details open>\n<summary><b>Module wall time</b> · 5 modules</summary>'), md);
+  assert.ok(md.includes('| Module | Time | |\n|---|---:|---|\n| Library A | 3.1 s | ████████████████████ |\n| Application | 1.4 s | █████████ |'), md);
+  assert.ok(md.includes('<details open>\n<summary><b>Lifecycle phase time</b> · 3 phases</summary>'), md);
+  assert.ok(md.includes('| Phase | Time | |\n|---|---:|---|\n| compile | 844 ms | ████████████████████ |\n| clean | 178 ms | ████ |\n| process-resources | 171 ms | ████ |'), md);
+  assert.ok(md.includes('<summary><b>Build timeline, CPU and memory usage</b> · 5 modules</summary>'), md);
+  // A Mermaid gantt (GitHub draws it): one task per module at its true window; the ":" of "IT04: Muti-module" would end the task name.
+  assert.ok(md.includes(`\`\`\`mermaid\n${GANTT_INIT}\ngantt\n    dateFormat HH:mm:ss.SSS\n    axisFormat %M:%S\n    tickInterval 1second\n    todayMarker off\n    section Modules\n    IT04 Muti-module (262 ms) :m1, 00:00:00.217, 00:00:00.479\n    Library A (3.1 s) :m2, 00:00:00.479, 00:00:03.613\n`), md);
+  assert.ok(md.includes('    Application (1.4 s) :m5, 00:00:06.222, 00:00:07.572\n```\n'), md);
+  assert.ok(!md.includes('<b>CPU usage</b>') && !md.includes('<b>GC pause</b>'), 'the tables mvn-lens removed from its Overview are not written: ' + md);
+  assert.ok(md.includes('<details open>\n<summary><b>Issues</b> · 1 issue</summary>\n\n**1 issue recorded** · 1 error\n\n- ❌ **ERROR** · mojo · org.mvnlens.it:lib-a:1.0-SNAPSHOT org.apache.maven.plugins:maven-surefire-plugin:test @default-test (test) — There are test failures. Please refer to target/surefire-reports `org.apache.maven.plugin.MojoFailureException`'), md);
+  assert.ok(md.includes('<details open>\n<summary><b>Warnings</b> · 1</summary>\n\n- Fork JVM lib-b: recording truncated \\| see the log'), md);
+  const n = model.tests.junitPlatform.length;
+  assert.ok(md.includes(`<details open>\n<summary><b>Tests</b> · no failure · ${n} slowest</summary>\n\nNo failed test.\n\n**${n} slowest tests** · mvn-lens ranks up to 10 per test framework; failures are listed above in full, so a fast failing test is not here\n\n| # | Test | Module | Framework | Duration |\n|---:|---|---|---|---:|\n| 1 | **LibATest**<br>#name | lib-a | JUNIT5 | 133 ms |\n| 2 | **AppTest**<br>#describes | app | JUNIT5 | 128 ms |`), md);
+  // The monitoring note opens the summary: it is what a reader of the run page needs first.
+  assert.ok(md.startsWith(`## 🔎 To go further: a more in-depth report, available a few minutes after this summary\n\n- 📊 **[This report](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3)** — the full mvn-lens report of this Maven build: timeline, tests, CPU, memory, GC, JIT and flame graphs\n- 🏃 **[This run](${SITE}#/run/${RUN_ID})** — every Maven build of this workflow run\n- 📚 **[All mvn-lens reports](${SITE}#/reports)** — the history kept on the monitoring page\n\n**Monitoring page: [${SITE}](${SITE})**  \n_This summary was written as the build ended; the Build monitor workflow processes the run once it completes, then GitHub Pages publishes the page — a few minutes later._\n\n### mvn-lens report — `), md.slice(0, 700));
+  assert.ok(md.indexOf('_This summary was written as the build ended;') < md.indexOf('\n### mvn-lens report — '), md.slice(0, 600));
+});
+
+test('job-summary: brief keeps the one-line block (with the few-minutes note, the report count, or the reason), none writes nothing, an unknown value warns and falls back to overview', async () => {
+  const fake = scenario();
+  const ws = workspace();
+  const brief = await runReport(fake, ws.dir, { 'INPUT_JOB-SUMMARY': 'brief' });
+  assert.equal(brief.res.exitCode, 0);
+  assert.equal(brief.out.published, 'true');
+  assert.deepEqual(brief.summary.trim().split(/\r?\n/), [
+    '### mvn-lens report — build › Build with Maven',
+    `Maven \`clean verify\` · **8.0 s** total · wall 7.6 s · CPU 903 ms · OK · 🔎 to go further, a few minutes after this summary: [in-depth report](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3) · [monitoring](${SITE}#/run/${RUN_ID})`,
+  ]);
+
+  const multi = tmpDir('brief-multi');
+  writeReport(path.join(multi, 'core', 'target', 'mvnlens', 'report.html'));
+  writeReport(path.join(multi, 'web', 'target', 'mvnlens', 'report.html'));
+  const two = await runReport(scenario(), multi, { 'INPUT_JOB-SUMMARY': 'brief', INPUT_REPORT: '**/target/mvnlens/report.html' });
+  assert.equal(two.out.published, 'true');
+  assert.deepEqual(two.summary.trim().split(/\r?\n/), [
+    '### mvn-lens reports — build › Build with Maven',
+    `Maven \`clean verify\` · **8.0 s** total · wall 7.6 s · CPU 903 ms · OK · 2 reports · 🔎 to go further, a few minutes after this summary: [in-depth reports](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3) · [monitoring](${SITE}#/run/${RUN_ID})`,
+  ]);
+
+  const unpublished = await runReport(fake, ws.dir, { 'INPUT_JOB-SUMMARY': 'brief', 'INPUT_GITHUB-TOKEN': '', GITHUB_TOKEN: null });
+  assert.equal(unpublished.res.exitCode, 0);
+  assert.equal(unpublished.out.published, 'false');
+  assert.deepEqual(unpublished.summary.trim().split(/\r?\n/), [
+    '### mvn-lens report — build',   // without a token the step cannot be resolved: the job key alone
+    'Maven `clean verify` · **8.0 s** total · wall 7.6 s · CPU 903 ms · OK · not published: github-token is empty; pass the workflow token (it needs contents: write and actions: read)',
+  ]);
+
+  const none = await runReport(fake, ws.dir, { 'INPUT_JOB-SUMMARY': 'none' });
+  assert.equal(none.res.exitCode, 0);
+  assert.equal(none.out.published, 'true');
+  assert.equal(none.summary, '');
+
+  const odd = await runReport(fake, ws.dir, { 'INPUT_JOB-SUMMARY': 'full' });
+  assert.equal(odd.res.exitCode, 0);
+  assert.match(odd.stdout, /::warning::build-monitor: job-summary "full" is not one of overview, brief, none; using overview/);
+  assert.match(odd.summary, /\*\*Duration 8\.0 s\*\*/);
+});
+
+test('the monitoring note spells the site out (a custom site-url too) and explains a missing token', async () => {
+  const fake = scenario();
+  const ws = workspace();
+  const custom = await runReport(fake, ws.dir, { 'INPUT_SITE-URL': 'https://ci.example.org/monitor' });
+  assert.equal(custom.out.published, 'true');
+  assert.ok(custom.summary.replace(/\r\n/g, '\n').includes('- 📊 **[This report](https://ci.example.org/monitor/#/report/777/j7770-s3)** — the full mvn-lens report of this Maven build: timeline, tests, CPU, memory, GC, JIT and flame graphs\n- 🏃 **[This run](https://ci.example.org/monitor/#/run/777)** — every Maven build of this workflow run\n- 📚 **[All mvn-lens reports](https://ci.example.org/monitor/#/reports)** — the history kept on the monitoring page\n\n**Monitoring page: [https://ci.example.org/monitor/](https://ci.example.org/monitor/)**  \n'), custom.summary);
+
+  const noToken = await runReport(fake, ws.dir, { 'INPUT_GITHUB-TOKEN': '', GITHUB_TOKEN: null });
+  assert.equal(noToken.res.exitCode, 0);
+  assert.equal(noToken.out.published, 'false');
+  assert.match(noToken.summary, /\*\*Duration 8\.0 s\*\*/);
+  assert.ok(noToken.summary.replace(/\r\n/g, '\n').includes(`## ⚠️ This report was not published\n\n**Reason:** github-token is empty; pass the workflow token (it needs contents: write and actions: read).  \nIt will not appear on the monitoring page [${SITE}](${SITE}).\n`), noToken.summary);
+});
+
+test('renderSummary: a report whose Overview would take the summary past MAX_SUMMARY_BYTES gets the brief line (GitHub drops a step summary above 1 MiB)', () => {
+  const model = fixtureModel();
+  const rep = { name: 'report.html', label: null, summary: summarizeModel(model), overview: overviewOf(model) };
+  const state = (reports) => ({ reports, summary: rep.summary, where: 'build › Build with Maven', published: true, urls: context.monitorUrls(SITE, RUN_ID, `j${JOB_ID}-s3`), reason: null });
+  const one = reportAction.renderSummary(state([rep]), 'overview');
+  const perReport = Buffer.byteLength(one, 'utf8');
+  assert.ok(perReport > 2000 && perReport < 64 * 1024, `one Overview is ${perReport} bytes`);
+  const n = Math.ceil(reportAction.MAX_SUMMARY_BYTES / perReport * 1.5);   // `one` includes the monitoring note: the blocks alone are smaller
+  const reports = Array.from({ length: n }, (_, i) => Object.assign({}, rep, { name: i ? `report-${i + 1}.html` : 'report.html', label: `r${i}` }));
+  const md = reportAction.renderSummary(state(reports), 'overview');
+  // The Overviews stop under the cap; what follows is one brief line per remaining report, far from GitHub's 1 MiB.
+  assert.ok(Buffer.byteLength(md, 'utf8') < reportAction.MAX_SUMMARY_BYTES + 64 * 1024 && Buffer.byteLength(md, 'utf8') < 1024 * 1024, `${Buffer.byteLength(md, 'utf8')} bytes`);
+  const overviews = (md.match(/\*\*Duration 8\.0 s\*\*/g) || []).length;
+  assert.ok(overviews >= 1 && overviews < n, `${overviews} Overviews of ${n} reports`);
+  assert.equal((md.match(/^### mvn-lens report — /gm) || []).length, n, 'every report keeps its heading');
+  // The Overviews come first, then only brief lines (the reports are the same size), and the cut is exactly where the
+  // code puts it: the Overview blocks written so far (`used`, without the newlines joining them) fit under the cap with
+  // room for the last one's body, and one more Overview body would not fit.
+  const parts = md.split(/(?=^### mvn-lens report — )/m);   // parts[0] is the monitoring note, then one part per report
+  assert.ok(parts[0].startsWith('## 🔎 To go further: more in-depth reports, available a few minutes after this summary'), 'the note opens the summary');
+  const blocks = parts.slice(1);
+  const k = blocks.findIndex(b => !b.includes('**Duration 8.0 s**'));
+  assert.equal(k, overviews, 'the Overviews come first');
+  assert.ok(blocks.slice(k).every(b => !b.includes('**Duration ')), 'then only brief lines');
+  // What the code had counted when it cut: the note and the k Overview blocks, without the k + 1 newlines joining them here.
+  const used = Buffer.byteLength(parts.slice(0, k + 1).join(''), 'utf8') - (k + 1);
+  const body = Buffer.byteLength(renderOverview(rep.overview), 'utf8');
+  assert.ok(used - body <= reportAction.MAX_SUMMARY_BYTES, `the last Overview fitted: ${used} - ${body} bytes`);
+  assert.ok(used + body > reportAction.MAX_SUMMARY_BYTES, `one more would not: ${used} + ${body} bytes`);
+  assert.ok(md.includes(`### mvn-lens report — build › Build with Maven · r${n - 1}\n\nMaven \`clean verify\` · **8.0 s** total · wall 7.6 s · CPU 903 ms · OK\n`), 'the last report has the brief line');
+  assert.ok(md.includes(`- 📊 **[These reports](${SITE}#/report/${RUN_ID}/j${JOB_ID}-s3)**`), md.slice(0, 600));
 });
