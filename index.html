@@ -552,6 +552,8 @@ body.viewer-mode main { padding: 0; max-width: none; margin: 0; height: 100%; }
       branches: branches,
       isSingleBranch: branches.length <= 1,
       hasDefaultBranchRuns: !!defaultBranch && runs.some(function (r) { return r.branch === defaultBranch; }),
+      hasReports: runs.some(function (r) { return r.mvnLens.length; }),
+      hasDefaultBranchReports: !!defaultBranch && runs.some(function (r) { return r.branch === defaultBranch && r.mvnLens.length; }),
       series: seriesOf(runs),
       ctx: ctx,
     };
@@ -714,9 +716,17 @@ body.viewer-mode main { padding: 0; max-width: none; margin: 0; height: 100%; }
   var RANGE_LABELS = { '7d': '7 days', '30d': '30 days', '90d': '90 days', '1y': '1 year', all: 'All' };
   var STATUSES = ['', 'success', 'failure', 'completed', 'running'];
   function rangeMs(range) { return { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[range] ? { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[range] * 86400000 : null; }
+  /**
+   * The default branch is a good first filter — most repositories build it — but never when it
+   * would empty the reports view: a repository whose CI skips its default branch (Quarkus, and
+   * any fork whose workflow ignores pushes to main) publishes every report from another branch,
+   * and preselecting the default branch there hides the whole point of the page.
+   */
   function defaultFilters(model) {
     var m = model || {};
-    return { range: '90d', branch: m.defaultBranch && !m.isSingleBranch && m.hasDefaultBranchRuns ? m.defaultBranch : '', event: '', status: '', workflow: '', text: '' };
+    var preselect = m.defaultBranch && !m.isSingleBranch && m.hasDefaultBranchRuns
+      && (!m.hasReports || m.hasDefaultBranchReports);
+    return { range: '90d', branch: preselect ? m.defaultBranch : '', event: '', status: '', workflow: '', text: '' };
   }
   /** Merges a saved filter object into the defaults, keeping only values that exist in this dataset. */
   function sanitizeFilters(saved, model) {
@@ -1211,8 +1221,21 @@ body.viewer-mode main { padding: 0; max-width: none; margin: 0; height: 100%; }
     if (!RUNS.length) { frag.appendChild(h('p', { class: 'empty', text: 'No runs recorded yet — the page fills up once the Build monitor workflow has processed a run.' })); return frag; }
     // Table first (one-click access to the reports is the primary use), then the trends strip.
     if (!rows.length) {
-      var anyReport = RUNS.some(function (r) { return r.mvnLens.length; });
-      frag.appendChild(h('p', { class: 'empty', text: anyReport ? 'No reports match the current filters.' : 'No mvn-lens report published yet. Add the mvn-perf/build-monitor/report step after your Maven step.' }));
+      var withReports = RUNS.filter(function (r) { return r.mvnLens.length; });
+      var message;
+      if (!withReports.length) {
+        message = 'No mvn-lens report published yet. Add the mvn-perf/build-monitor/report step after your Maven step.';
+      } else {
+        // Naming the branches that do hold reports turns a dead end into one click: a repository
+        // whose CI never builds the default branch publishes everything from elsewhere.
+        var elsewhere = M.uniq(withReports.map(function (r) { return r.branch; })).filter(Boolean);
+        message = 'No reports match the current filters.';
+        if (filters.branch && elsewhere.indexOf(filters.branch) < 0) {
+          message += ' Every report so far comes from ' + (elsewhere.length === 1 ? 'branch ' + elsewhere[0] : 'other branches (' + elsewhere.join(', ') + ')')
+            + ' — clear the branch filter to see them.';
+        }
+      }
+      frag.appendChild(h('p', { class: 'empty', text: message }));
     } else {
       frag.appendChild(reportsTable(rows, { grouped: true }));
     }
