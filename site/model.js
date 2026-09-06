@@ -265,6 +265,8 @@
       branches: branches,
       isSingleBranch: branches.length <= 1,
       hasDefaultBranchRuns: !!defaultBranch && runs.some(function (r) { return r.branch === defaultBranch; }),
+      hasReports: runs.some(function (r) { return r.mvnLens.length; }),
+      hasDefaultBranchReports: !!defaultBranch && runs.some(function (r) { return r.branch === defaultBranch && r.mvnLens.length; }),
       series: seriesOf(runs),
       ctx: ctx,
     };
@@ -427,9 +429,17 @@
   var RANGE_LABELS = { '7d': '7 days', '30d': '30 days', '90d': '90 days', '1y': '1 year', all: 'All' };
   var STATUSES = ['', 'success', 'failure', 'completed', 'running'];
   function rangeMs(range) { return { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[range] ? { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[range] * 86400000 : null; }
+  /**
+   * The default branch is a good first filter — most repositories build it — but never when it
+   * would empty the reports view: a repository whose CI skips its default branch (Quarkus, and
+   * any fork whose workflow ignores pushes to main) publishes every report from another branch,
+   * and preselecting the default branch there hides the whole point of the page.
+   */
   function defaultFilters(model) {
     var m = model || {};
-    return { range: '90d', branch: m.defaultBranch && !m.isSingleBranch && m.hasDefaultBranchRuns ? m.defaultBranch : '', event: '', status: '', workflow: '', text: '' };
+    var preselect = m.defaultBranch && !m.isSingleBranch && m.hasDefaultBranchRuns
+      && (!m.hasReports || m.hasDefaultBranchReports);
+    return { range: '90d', branch: preselect ? m.defaultBranch : '', event: '', status: '', workflow: '', text: '' };
   }
   /** Merges a saved filter object into the defaults, keeping only values that exist in this dataset. */
   function sanitizeFilters(saved, model) {

@@ -353,6 +353,31 @@ test('defaultFilters and sanitizeFilters keep only values that exist in the data
   assert.deepEqual(M.sanitizeFilters('garbage', model).range, '90d');
 });
 
+test('defaultFilters does not preselect a default branch that holds no report', () => {
+  // A repository whose CI never builds its default branch (Quarkus skips main in forks, and any
+  // workflow with `push: branches-ignore: [main]` does the same): every report comes from another
+  // branch, so preselecting the default branch would show an empty reports view.
+  const raw = rawHistory();
+  const reports = raw.runs.find(r => r.branch === 'main').mvnLens;
+  raw.runs.forEach(r => { if (r.branch === 'main') r.mvnLens = []; });
+  const off = raw.runs.find(r => r.branch !== 'main');
+  off.mvnLens = reports;
+
+  const model = M.normalize(raw);
+  assert.equal(model.hasReports, true);
+  assert.equal(model.hasDefaultBranchReports, false);
+  assert.equal(model.hasDefaultBranchRuns, true, 'main still has runs, they just publish no report');
+  assert.equal(M.defaultFilters(model).branch, '', 'no branch preselected when it would hide every report');
+
+  // A dataset with no report at all keeps the old behaviour: the default branch is still the
+  // most useful first filter for the builds view.
+  const noReports = rawHistory();
+  noReports.runs.forEach(r => { r.mvnLens = []; });
+  const bare = M.normalize(noReports);
+  assert.equal(bare.hasReports, false);
+  assert.equal(M.defaultFilters(bare).branch, 'main');
+});
+
 // ---------------------------------------------------------------------------
 // misc
 // ---------------------------------------------------------------------------

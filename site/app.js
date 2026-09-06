@@ -384,8 +384,21 @@
     if (!RUNS.length) { frag.appendChild(h('p', { class: 'empty', text: 'No runs recorded yet — the page fills up once the Build monitor workflow has processed a run.' })); return frag; }
     // Table first (one-click access to the reports is the primary use), then the trends strip.
     if (!rows.length) {
-      var anyReport = RUNS.some(function (r) { return r.mvnLens.length; });
-      frag.appendChild(h('p', { class: 'empty', text: anyReport ? 'No reports match the current filters.' : 'No mvn-lens report published yet. Add the mvn-perf/build-monitor/report step after your Maven step.' }));
+      var withReports = RUNS.filter(function (r) { return r.mvnLens.length; });
+      var message;
+      if (!withReports.length) {
+        message = 'No mvn-lens report published yet. Add the mvn-perf/build-monitor/report step after your Maven step.';
+      } else {
+        // Naming the branches that do hold reports turns a dead end into one click: a repository
+        // whose CI never builds the default branch publishes everything from elsewhere.
+        var elsewhere = M.uniq(withReports.map(function (r) { return r.branch; })).filter(Boolean);
+        message = 'No reports match the current filters.';
+        if (filters.branch && elsewhere.indexOf(filters.branch) < 0) {
+          message += ' Every report so far comes from ' + (elsewhere.length === 1 ? 'branch ' + elsewhere[0] : 'other branches (' + elsewhere.join(', ') + ')')
+            + ' — clear the branch filter to see them.';
+        }
+      }
+      frag.appendChild(h('p', { class: 'empty', text: message }));
     } else {
       frag.appendChild(reportsTable(rows, { grouped: true }));
     }
